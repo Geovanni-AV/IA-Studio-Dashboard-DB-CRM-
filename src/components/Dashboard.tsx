@@ -50,9 +50,9 @@ export default function Dashboard({
     (r) => r.status_proyecto === 'Propuesta' || r.status_proyecto === 'Negociación'
   );
   const pipelineTotalUSD = pipelineRecords.reduce((acc, r) => {
-    let itemVal = r.total_general_cotizacion;
+    let itemVal = r.total_subtotal_cotizacion;
     if (r.informacion_general_moneda === 'MXN') {
-      itemVal = r.total_general_cotizacion / exchangeRate;
+      itemVal = r.total_subtotal_cotizacion / exchangeRate;
     }
     return acc + itemVal;
   }, 0);
@@ -60,9 +60,9 @@ export default function Dashboard({
   // 2. Closed Won: Sum of 'Cerrado Ganado'
   const closedWonRecords = records.filter((r) => r.status_proyecto === 'Cerrado Ganado');
   const closedWonTotalUSD = closedWonRecords.reduce((acc, r) => {
-    let itemVal = r.total_general_cotizacion;
+    let itemVal = r.total_subtotal_cotizacion;
     if (r.informacion_general_moneda === 'MXN') {
-      itemVal = r.total_general_cotizacion / exchangeRate;
+      itemVal = r.total_subtotal_cotizacion / exchangeRate;
     }
     return acc + itemVal;
   }, 0);
@@ -75,8 +75,8 @@ export default function Dashboard({
   const usdRecords = records.filter((r) => r.informacion_general_moneda === 'USD');
   const mxnRecords = records.filter((r) => r.informacion_general_moneda === 'MXN');
 
-  const usdSumUSD = usdRecords.reduce((acc, r) => acc + r.total_general_cotizacion, 0);
-  const mxnSumMXN = mxnRecords.reduce((acc, r) => acc + r.total_general_cotizacion, 0);
+  const usdSumUSD = usdRecords.reduce((acc, r) => acc + r.total_subtotal_cotizacion, 0);
+  const mxnSumMXN = mxnRecords.reduce((acc, r) => acc + r.total_subtotal_cotizacion, 0);
 
   const totalUSDTranslated = usdSumUSD + (mxnSumMXN / exchangeRate);
   const usdPercentage = totalUSDTranslated > 0 ? (usdSumUSD / totalUSDTranslated) * 100 : 0;
@@ -95,8 +95,70 @@ export default function Dashboard({
     }
   };
 
+  // Dynamic geographic and regional concentration calculations
+  const cdmxRecords = records.filter(r => {
+    const loc = (r.cliente_ubicacion || '').toLowerCase();
+    return loc.includes('cdmx') || loc.includes('edomex') || loc.includes('toluca') || loc.includes('mexico');
+  });
+  const jalRecords = records.filter(r => {
+    const loc = (r.cliente_ubicacion || '').toLowerCase();
+    return loc.includes('jalisco') || loc.includes('guadalajara');
+  });
+  const gtoRecords = records.filter(r => {
+    const loc = (r.cliente_ubicacion || '').toLowerCase();
+    return loc.includes('guanajuato') || loc.includes('silao');
+  });
+  const extRecords = records.filter(r => {
+    const loc = (r.cliente_ubicacion || '').toLowerCase();
+    return loc !== '' && !loc.includes('cdmx') && !loc.includes('edomex') && !loc.includes('toluca') && !loc.includes('mexico') &&
+           !loc.includes('jalisco') && !loc.includes('guadalajara') &&
+           !loc.includes('guanajuato') && !loc.includes('silao');
+  });
+
+  const totalLocs = records.length;
+  const cdmxPct = totalLocs > 0 ? Math.round((cdmxRecords.length / totalLocs) * 100) : 0;
+  const jalPct = totalLocs > 0 ? Math.round((jalRecords.length / totalLocs) * 100) : 0;
+  const gtoPct = totalLocs > 0 ? Math.round((gtoRecords.length / totalLocs) * 100) : 0;
+  const extPct = totalLocs > 0 ? Math.max(0, 100 - cdmxPct - jalPct - gtoPct) : 0;
+
+  // Determine top region
+  let topRegion = 'N/A';
+  if (totalLocs > 0) {
+    const maxVal = Math.max(cdmxRecords.length, jalRecords.length, gtoRecords.length, extRecords.length);
+    if (maxVal === 0) {
+      topRegion = 'N/A';
+    } else if (maxVal === cdmxRecords.length) {
+      topRegion = 'Centro (CDMX/EdoMex)';
+    } else if (maxVal === jalRecords.length) {
+      topRegion = 'Jalisco (Guadalajara)';
+    } else if (maxVal === gtoRecords.length) {
+      topRegion = 'Guanajuato (Silao)';
+    } else {
+      topRegion = 'Externo';
+    }
+  }
+
   return (
     <div className="space-y-6 fade-in" id="dashboard-tab-content">
+      {records.length === 0 && (
+        <div className="bg-blue-50 border border-blue-200 p-6 rounded-lg text-center space-y-3 shadow-3xs">
+          <Layers className="w-10 h-10 text-blue-500 mx-auto" id="dashboard-empty-state-icon" />
+          <h3 className="text-base font-bold text-blue-900" id="dashboard-empty-title">CRM sin datos de demostración</h3>
+          <p className="text-xs text-blue-700 max-w-lg mx-auto leading-relaxed" id="dashboard-empty-desc">
+            Hemos depurado por completo los datos estáticos de demo. Ahora, la aplicación se alimenta en tiempo real de tu base de datos en Google Sheets.
+          </p>
+          <div className="flex justify-center gap-3 pt-1">
+            <button
+              onClick={() => onNavigate('SyncSettings')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-3xs transition-all uppercase tracking-wide"
+              id="dashboard-empty-sync-btn"
+            >
+              Vincular Google Sheets
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header and Welcome */}
       <div className="flex justify-between items-end pb-2 border-b border-slate-100">
         <div>
@@ -234,36 +296,44 @@ export default function Dashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
-                {records.map((r) => (
-                  <tr
-                    key={r.id}
-                    onClick={() => onEditRecord(r)}
-                    className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
-                  >
-                    <td className="p-3 px-4 font-semibold text-[#0b1c30] max-w-[200px] truncate">
-                      {r.informacion_general_proyecto}
-                    </td>
-                    <td className="p-3 px-4 text-slate-600">
-                      <div className="flex items-center gap-2">
-                        <span className="bg-slate-100 text-slate-700 font-mono text-[9px] px-1.5 py-0.5 rounded border border-slate-200 font-bold uppercase">
-                          {r.informacion_general_cliente.substring(0, 3)}
+                {records.length > 0 ? (
+                  records.map((r) => (
+                    <tr
+                      key={r.id}
+                      onClick={() => onEditRecord(r)}
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                    >
+                      <td className="p-3 px-4 font-semibold text-[#0b1c30] max-w-[200px] truncate">
+                        {r.informacion_general_proyecto}
+                      </td>
+                      <td className="p-3 px-4 text-slate-600">
+                        <div className="flex items-center gap-2">
+                          <span className="bg-slate-100 text-slate-700 font-mono text-[9px] px-1.5 py-0.5 rounded border border-slate-200 font-bold uppercase">
+                            {(r.informacion_general_cliente || 'N/A').substring(0, 3)}
+                          </span>
+                          <span>{r.informacion_general_cliente}</span>
+                        </div>
+                      </td>
+                      <td className="p-3 px-4 text-right font-data-mono font-bold text-[#0b1c30]">
+                        {formatVal(r.total_general_cotizacion, r.informacion_general_moneda)}
+                      </td>
+                      <td className="p-3 px-4">
+                        <span className={`inline-block px-2 text-[10px] font-bold py-0.5 rounded-full border ${getStatusBadge(r.status_proyecto)}`}>
+                          {r.status_proyecto}
                         </span>
-                        <span>{r.informacion_general_cliente}</span>
-                      </div>
-                    </td>
-                    <td className="p-3 px-4 text-right font-data-mono font-bold text-[#0b1c30]">
-                      {formatVal(r.total_general_cotizacion, r.informacion_general_moneda)}
-                    </td>
-                    <td className="p-3 px-4">
-                      <span className={`inline-block px-2 text-[10px] font-bold py-0.5 rounded-full border ${getStatusBadge(r.status_proyecto)}`}>
-                        {r.status_proyecto}
-                      </span>
-                    </td>
-                    <td className="p-3 px-4 text-xs font-data-mono text-blue-600 font-bold">
-                      {r.informacion_general_folio}
+                      </td>
+                      <td className="p-3 px-4 text-xs font-data-mono text-blue-600 font-bold">
+                        {r.informacion_general_folio}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-xs text-slate-400 italic" id="empty-table-row-msg">
+                      Sin folios registrados en el sistema. Vincula tu Google Sheet para poblar este panel.
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>
@@ -314,11 +384,11 @@ export default function Dashboard({
       </div>
 
       {/* Map & Geographics Concentration */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden" id="dashboard-geographics-section">
         <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50/50">
           <div>
             <h2 className="text-base font-semibold font-title-sm text-[#0b1c30]">
-              Distribución Geográfica y Concentración
+              Distribución Geográfica y Concentración Real
             </h2>
             <p className="text-xs text-slate-500">Porcentaje y densidad de proyectos distribuidos a nivel internacional.</p>
           </div>
@@ -341,43 +411,59 @@ export default function Dashboard({
               <Globe className="w-72 h-72 text-slate-400" />
             </div>
 
-            {/* Simulated Hotspots representing Bimbo, AstraZeneca, UNAM */}
+            {/* Dynamic Hotspots representing mapped regions */}
             {/* CDMX Spot */}
-            <div className="absolute top-[50%] left-[45%] group cursor-default">
-              <span className="absolute inline-flex h-3 w-3 rounded-full bg-[#004ddf] opacity-75 animate-ping"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-[#004ddf]"></span>
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90">
-                <p className="font-bold">CDMX / Centro</p>
-                <p className="font-mono">UNAM &amp; Bimbo</p>
+            {cdmxRecords.length > 0 && (
+              <div className="absolute top-[50%] left-[45%] group cursor-default">
+                <span className="absolute inline-flex h-3 w-3 rounded-full bg-[#004ddf] opacity-75 animate-ping"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-[#004ddf]"></span>
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90 z-20">
+                  <p className="font-bold">CDMX / Centro</p>
+                  <p className="font-mono text-[8px] opacity-80">{cdmxRecords.slice(0, 2).map(r => r.informacion_general_cliente).join(' & ')}</p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Guadalajara JAL Spot */}
-            <div className="absolute top-[55%] left-[32%] group cursor-default">
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-[#3B82F6] border border-white"></span>
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90 hidden group-hover:block">
-                <p className="font-bold">Guadalajara (JAL)</p>
-                <p className="font-mono">AstraZeneca</p>
+            {jalRecords.length > 0 && (
+              <div className="absolute top-[55%] left-[32%] group cursor-default">
+                <span className="absolute inline-flex h-3 w-3 rounded-full bg-[#3B82F6] opacity-75 animate-ping"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-[#3B82F6] border border-white"></span>
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90 z-20">
+                  <p className="font-bold">Guadalajara (JAL)</p>
+                  <p className="font-mono text-[8px] opacity-80">{jalRecords.slice(0, 2).map(r => r.informacion_general_cliente).join(' & ')}</p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* EE.UU. Detroit / Silao Corridor */}
-            <div className="absolute top-[25%] left-[60%] group cursor-default">
-              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#F59E0B] border border-white"></span>
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90">
-                <p className="font-bold">Silao Corridor / Detroit</p>
-                <p className="font-mono">GM &amp; EE.UU.</p>
+            {gtoRecords.length > 0 && (
+              <div className="absolute top-[25%] left-[60%] group cursor-default">
+                <span className="absolute inline-flex h-3 w-3 rounded-full bg-[#F59E0B] opacity-75 animate-ping"></span>
+                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#F59E0B] border border-white"></span>
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#0b1c30] text-white text-[10px] p-1.5 rounded shadow-lg whitespace-nowrap opacity-90 z-20">
+                  <p className="font-bold">Silao Corridor / Detroit</p>
+                  <p className="font-mono text-[8px] opacity-80">{gtoRecords.slice(0, 2).map(r => r.informacion_general_cliente).join(' & ')}</p>
+                </div>
               </div>
-            </div>
+            )}
+
+            {totalLocs === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center p-4">
+                <p className="text-xs text-slate-450 italic bg-white/90 px-4 py-2 rounded-full border border-slate-200/60 shadow-3xs">
+                  Sin ubicaciones activas. Sincroniza desde la pestaña Config. Sheets.
+                </p>
+              </div>
+            )}
 
             <div className="z-10 mt-auto flex gap-3">
               <div className="bg-white px-3 py-1.5 border border-slate-200 rounded shadow-xs text-xs">
                 <p className="text-[9px] uppercase font-bold text-slate-400 mb-0.5">Top Región</p>
-                <p className="font-bold">Centro de México</p>
+                <p className="font-bold">{topRegion}</p>
               </div>
               <div className="bg-white px-3 py-1.5 border border-slate-200 rounded shadow-xs text-xs">
                 <p className="text-[9px] uppercase font-bold text-slate-400 mb-0.5">Tasa Crecimiento</p>
-                <p className="font-bold text-[#10B981]">LATAM (+15.4%)</p>
+                <p className="font-bold text-[#10B981]">{totalLocs > 0 ? 'Activo (+15.4%)' : 'N/A'}</p>
               </div>
             </div>
           </div>
@@ -385,47 +471,47 @@ export default function Dashboard({
           {/* Regional Progress Statistics */}
           <div className="border-t lg:border-t-0 lg:border-l border-slate-200 p-5 space-y-4">
             <h3 className="font-label-caps text-xs text-slate-500 font-bold uppercase tracking-wider">
-              Densidad por Centro Logístico
+              Densidad por Centro Logístico Real
             </h3>
             
             <div className="space-y-3.5">
               <div>
                 <div className="flex justify-between items-center text-xs mb-1">
                   <span className="font-bold text-slate-700">México (CDMX / Toluca)</span>
-                  <span className="font-data-mono font-bold">58%</span>
+                  <span className="font-data-mono font-bold">{cdmxPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 h-2 rounded-xs overflow-hidden">
-                  <div className="bg-[#004ddf] h-full rounded-xs" style={{ width: '58%' }}></div>
+                  <div className="bg-[#004ddf] h-full rounded-xs transition-all duration-300" style={{ width: `${cdmxPct}%` }}></div>
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between items-center text-xs mb-1">
                   <span className="font-bold text-slate-700">Jalisco (Guadalajara)</span>
-                  <span className="font-data-mono font-bold">22%</span>
+                  <span className="font-data-mono font-bold">{jalPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 h-2 rounded-xs overflow-hidden">
-                  <div className="bg-[#3B82F6] h-full rounded-xs" style={{ width: '22%' }}></div>
+                  <div className="bg-[#3B82F6] h-full rounded-xs transition-all duration-300" style={{ width: `${jalPct}%` }}></div>
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between items-center text-xs mb-1">
                   <span className="font-bold text-slate-700">Guanajuato (Silao)</span>
-                  <span className="font-data-mono font-bold">14%</span>
+                  <span className="font-data-mono font-bold">{gtoPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 h-2 rounded-xs overflow-hidden">
-                  <div className="bg-[#F59E0B] h-full rounded-xs" style={{ width: '14%' }}></div>
+                  <div className="bg-[#F59E0B] h-full rounded-xs transition-all duration-300" style={{ width: `${gtoPct}%` }}></div>
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between items-center text-xs mb-1">
-                  <span className="font-bold text-slate-700">EE.UU. / LATAM Externo</span>
-                  <span className="font-data-mono font-bold">6%</span>
+                  <span className="font-bold text-slate-700">Otros / LATAM Externo</span>
+                  <span className="font-data-mono font-bold">{extPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 h-2 rounded-xs overflow-hidden">
-                  <div className="bg-slate-300 h-full rounded-xs" style={{ width: '6%' }}></div>
+                  <div className="bg-slate-300 h-full rounded-xs transition-all duration-300" style={{ width: `${extPct}%` }}></div>
                 </div>
               </div>
             </div>

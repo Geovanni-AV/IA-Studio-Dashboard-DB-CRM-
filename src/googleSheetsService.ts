@@ -226,9 +226,17 @@ export async function syncFromGoogleSheets(
 
         const hw = getNum(hardwareIdx);
         const sv = getNum(serviciosIdx);
-        const sub = hw + sv;
-        const iva = sub * 0.16; // strict 16% VAT logic
-        const tot = sub + iva;
+        
+        // Read directly from the spreadsheet's precalculated columns if they exist
+        const hasSub = getVal(subtotalIdx) !== '';
+        const rawSub = getNum(subtotalIdx);
+        const sub = hasSub ? rawSub : (hw + sv);
+        
+        const hasIva = getVal(ivaIdx) !== '';
+        const iva = hasIva ? getNum(ivaIdx) : (sub * 0.16);
+        
+        const hasTot = getVal(totalIdx) !== '';
+        const tot = hasTot ? getNum(totalIdx) : (sub + iva);
 
         // Smart status detection to handle empty strings or match order presence
         const rawStatus = getVal(statusIdx).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
