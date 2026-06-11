@@ -757,29 +757,21 @@ export default function App() {
                 onSyncComplete={async (responseLogs, syncedRecords) => {
                   if (syncedRecords && syncedRecords.length > 0) {
                     setRecords(syncedRecords);
-                    // Bilateral Sync to Supabase Cloud
+                    
+                    // Subir automáticamente a Supabase los nuevos registros sincronizados
                     const url = localStorage.getItem('verse_supabase_url') || '';
                     const key = localStorage.getItem('verse_supabase_key') || '';
-                    const autoSync = localStorage.getItem('verse_supabase_autosync') !== 'false';
-                    if (url && key && autoSync) {
-                      appendAuditLog('CONEXIÓN HOJA', `Iniciando propagación de ${syncedRecords.length} registros importados de Google Sheets hacia Supabase Cloud...`);
-                      showToast('Iniciando sincronización bilateral en Supabase Cloud...', 'info');
-                      try {
-                        const result = await bulkUploadToSupabase(url, key, syncedRecords, contacts, auditLogs);
-                        if (result.success) {
-                          appendAuditLog('CONEXIÓN HOJA', `Sincronización bilateral exitosa en Supabase Cloud. ${result.message}`);
-                          showToast('Ecosistema sincronizado bilateralmente en Supabase Cloud', 'success');
-                        } else {
-                          appendAuditLog('CONEXIÓN HOJA', `Fallo de propagación bilateral: ${result.message}`);
-                          showToast(`Fallo en propagación bilateral de Supabase: ${result.message}`, 'error');
-                        }
-                      } catch (err: any) {
-                        console.error('Error bilateral sync:', err);
-                        showToast(`Error al sincronizar con Supabase: ${err.message}`, 'error');
+                    if (url && key) {
+                      showToast('Subiendo registros de Google Sheets a Supabase Cloud...', 'info');
+                      const res = await bulkUploadToSupabase(url, key, syncedRecords, contacts, auditLogs);
+                      if (res.success) {
+                        showToast('¡Base de datos Supabase actualizada correctamente!', 'success');
+                        appendAuditLog('CONEXIÓN HOJA', 'Sincronizó y subió la base de datos desde Google Sheets a Supabase.');
+                      } else {
+                        showToast(`Error al subir a Supabase: ${res.message}`, 'error');
                       }
                     }
                   }
-                  console.log('Sincronización finalizada correctamente.');
                 }}
                 onShowAudit={appendAuditLog}
               />

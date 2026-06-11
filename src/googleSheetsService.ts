@@ -127,93 +127,101 @@ export async function syncFromGoogleSheets(
     addLog(`Validando cabeceras y decodificación de columnas del CRM...`, 'info');
     
     // Dynamic mapping mapping indexes matching spreadsheet structure
-    let idIdx = 0;
-    let folioIdx = 1;
-    let fechaIdx = 2;
-    let clienteIdx = 3;
-    let plantaIdx = 4;
-    let paisIdx = 5;
-    let ubicacionIdx = 6;
-    let proyectoIdx = 7;
-    let linkCotizacionIdx = 8;
-    let hardwareIdx = 9;
-    let serviciosIdx = 10;
-    let subtotalIdx = 11;
-    let ivaIdx = 12;
-    let totalIdx = 13;
-    let monedaIdx = 14;
-    let statusIdx = 15;
-    let folioOcIdx = 16;
-    let linkOcIdx = 17;
-    let notasIdx = 18;
-
     const values = data.values || [];
-    if (values.length > 0) {
-      const headersRow = values[0];
-      headersRow.forEach((h: any, idx: number) => {
-        const text = String(h).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-        
-        if (text === 'id' || text === '_id') {
-          idIdx = idx;
-        } else if (text.includes('link_orden_compra') || text.includes('link oc') || text.includes('link_oc') || (text.includes('link') && (text.includes('compra') || text.includes('oc')))) {
-          linkOcIdx = idx;
-        } else if (text.includes('folio_orden_compra') || text.includes('folio oc') || text.includes('folio_oc') || (text.includes('folio') && (text.includes('compra') || text.includes('oc')))) {
-          folioOcIdx = idx;
-        } else if (text.includes('total_hardware_cotizacion') || text.includes('total_hardware')) {
-          hardwareIdx = idx;
-        } else if (text.includes('total_servicios_cotizacion') || text.includes('total_servicios')) {
-          serviciosIdx = idx;
-        } else if (text.includes('total_subtotal_cotizacion')) {
-          subtotalIdx = idx;
-        } else if (text.includes('total_iva_cotizacion')) {
-          ivaIdx = idx;
-        } else if (text.includes('total_general_cotizacion')) {
-          totalIdx = idx;
-        } else if (text.includes('link_cotizacion') || text.includes('link cotizacion') || text === 'link_cotizacion' || text === 'link cotizacion') {
-          linkCotizacionIdx = idx;
-        } else if (text.includes('cliente_pais') || text === 'pais' || text.includes('pais')) {
-          paisIdx = idx;
-        } else if (text.includes('cliente_ubicacion') || text === 'ubicacion' || text.includes('ubicacion')) {
-          ubicacionIdx = idx;
-        } else if (text.includes('fecha_registro') || text === 'fecha registro' || (text.includes('fecha') && text.includes('registro'))) {
-          fechaIdx = idx;
-        } else if (text.includes('status_proyecto') || text === 'status' || text === 'estado' || text.includes('status') || text.includes('estado')) {
-          statusIdx = idx;
-        } else if (text === 'folio' || (text.includes('folio') && !text.includes('oc') && !text.includes('compra'))) {
-          folioIdx = idx;
-        } else if (text === 'hardware' || (text.includes('hardware') && !text.includes('total'))) {
-          hardwareIdx = idx;
-        } else if (text === 'servicios' || text === 'servicio' || ((text.includes('servicios') || text.includes('servicio')) && !text.includes('total'))) {
-          serviciosIdx = idx;
-        } else if (text === 'subtotal' || (text.includes('subtotal') && !text.includes('total'))) {
-          subtotalIdx = idx;
-        } else if (text === 'iva' || (text.includes('iva') && !text.includes('total'))) {
-          ivaIdx = idx;
-        } else if (text === 'total' || (text.includes('total') && !text.includes('hardware') && !text.includes('servicios') && !text.includes('subtotal') && !text.includes('iva'))) {
-          totalIdx = idx;
-        } else if (text === 'cliente' || (text.includes('cliente') && !text.includes('pais') && !text.includes('ubicacion'))) {
-          clienteIdx = idx;
-        } else if (text === 'planta' || text.includes('planta')) {
-          plantaIdx = idx;
-        } else if (text === 'proyecto' || text.includes('proyecto')) {
-          proyectoIdx = idx;
-        } else if (text === 'moneda' || text.includes('moneda')) {
-          monedaIdx = idx;
-        } else if (text === 'notas' || text.includes('notas')) {
-          notasIdx = idx;
-        } else if (text === 'cotizacion' || (text.includes('cotizacion') && !text.includes('hardware') && !text.includes('servicios') && !text.includes('subtotal') && !text.includes('iva') && !text.includes('total'))) {
-          linkCotizacionIdx = idx;
-        } else if (text.includes('fecha')) {
-          fechaIdx = idx;
-        }
+
+    // 1. Encontrar la fila de la cabecera real (la primera que contenga 'folio' o 'id' o 'cliente')
+    let headerRowIdx = 0;
+    for (let i = 0; i < Math.min(10, values.length); i++) {
+      const row = values[i] || [];
+      const hasFolioOrId = row.some(cell => {
+        const t = String(cell).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        return t === 'folio' || t === 'id' || t === 'cliente' || t === 'fecha registro' || t === 'informacion_general_folio';
       });
-      addLog(`Columnas identificadas dinámicamente: Folio=${folioIdx}, Cliente=${clienteIdx}, Estado=${statusIdx}, Hardware=${hardwareIdx}, Servicios=${serviciosIdx}.`, 'success');
+      if (hasFolioOrId) {
+        headerRowIdx = i;
+        break;
+      }
     }
+    const headersRow = values[headerRowIdx] || [];
+
+    // Inicializar índices en -1 para validar si se encontraron en el Sheet
+    let idIdx = -1, folioIdx = -1, fechaIdx = -1, clienteIdx = -1, plantaIdx = -1;
+    let paisIdx = -1, ubicacionIdx = -1, proyectoIdx = -1, linkCotizacionIdx = -1;
+    let hardwareIdx = -1, serviciosIdx = -1, subtotalIdx = -1, ivaIdx = -1, totalIdx = -1;
+    let monedaIdx = -1, statusIdx = -1, folioOcIdx = -1, linkOcIdx = -1, notasIdx = -1;
+
+    headersRow.forEach((h: any, idx: number) => {
+      const text = String(h).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      
+      if (text === 'id' || text === '_id') {
+        idIdx = idx;
+      } else if (text === 'folio' || (text.includes('folio') && !text.includes('oc') && !text.includes('compra'))) {
+        folioIdx = idx;
+      } else if (text.includes('fecha_registro') || text === 'fecha registro' || text === 'registro') {
+        fechaIdx = idx;
+      } else if (text.includes('cliente_pais') || text === 'pais' || text === 'country') {
+        paisIdx = idx;
+      } else if (text.includes('cliente_ubicacion') || text === 'ubicacion' || text === 'ciudad' || text === 'location') {
+        ubicacionIdx = idx;
+      } else if (text.includes('link_orden_compra') || text.includes('link oc') || text.includes('link_oc')) {
+        linkOcIdx = idx;
+      } else if (text.includes('folio_orden_compra') || text.includes('folio oc') || text.includes('folio_oc')) {
+        folioOcIdx = idx;
+      } else if (text.includes('total_hardware_cotizacion') || text.includes('total_hardware') || text === 'hardware') {
+        hardwareIdx = idx;
+      } else if (text.includes('total_servicios_cotizacion') || text.includes('total_servicios') || text === 'servicios' || text === 'servicio') {
+        serviciosIdx = idx;
+      } else if (text.includes('total_subtotal_cotizacion') || text === 'subtotal') {
+        subtotalIdx = idx;
+      } else if (text.includes('total_iva_cotizacion') || text === 'iva') {
+        ivaIdx = idx;
+      } else if (text.includes('total_general_cotizacion') || text === 'total') {
+        totalIdx = idx;
+      } else if (text.includes('link_cotizacion') || text.includes('link cotizacion') || text === 'cotizacion') {
+        linkCotizacionIdx = idx;
+      } else if (text.includes('status_proyecto') || text === 'status' || text === 'estado') {
+        statusIdx = idx;
+      } else if (text === 'cliente' || (text.includes('cliente') && !text.includes('pais') && !text.includes('ubicacion'))) {
+        clienteIdx = idx;
+      } else if (text === 'planta' || text.includes('planta')) {
+        plantaIdx = idx;
+      } else if (text === 'proyecto' || text.includes('proyecto')) {
+        proyectoIdx = idx;
+      } else if (text === 'moneda' || text.includes('moneda')) {
+        monedaIdx = idx;
+      } else if (text === 'notas' || text.includes('notas')) {
+        notasIdx = idx;
+      }
+    });
+
+    // Asignar fallbacks por orden posicional por defecto si no se encontraron las cabeceras por nombre
+    if (idIdx === -1) idIdx = 0;
+    if (folioIdx === -1) folioIdx = 1;
+    if (fechaIdx === -1) fechaIdx = 2;
+    if (clienteIdx === -1) clienteIdx = 3;
+    if (plantaIdx === -1) plantaIdx = 4;
+    if (paisIdx === -1) paisIdx = 5;
+    if (ubicacionIdx === -1) ubicacionIdx = 6;
+    if (proyectoIdx === -1) proyectoIdx = 7;
+    if (linkCotizacionIdx === -1) linkCotizacionIdx = 8;
+    if (hardwareIdx === -1) hardwareIdx = 9;
+    if (serviciosIdx === -1) serviciosIdx = 10;
+    if (subtotalIdx === -1) subtotalIdx = 11;
+    if (ivaIdx === -1) ivaIdx = 12;
+    if (totalIdx === -1) totalIdx = 13;
+    if (monedaIdx === -1) monedaIdx = 14;
+    if (statusIdx === -1) statusIdx = 15;
+    if (folioOcIdx === -1) folioOcIdx = 16;
+    if (linkOcIdx === -1) linkOcIdx = 17;
+    if (notasIdx === -1) notasIdx = 18;
+
+    addLog(`Columnas identificadas dinámicamente: Folio=${folioIdx}, Cliente=${clienteIdx}, Estado=${statusIdx}, Hardware=${hardwareIdx}, Servicios=${serviciosIdx}.`, 'success');
 
     const parsedRecords: CRMRecord[] = [];
     const seenIds = new Set<string>();
-    if (values.length > 1) {
-      const dataRows = values.slice(1);
+    const dataRows = values.slice(headerRowIdx + 1);
+
+    if (dataRows.length > 0) {
       dataRows.forEach((row: any[]) => {
         const getVal = (idx: number, fallback: string = ''): string => {
           return row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : fallback;
@@ -221,7 +229,7 @@ export async function syncFromGoogleSheets(
         const getNum = (idx: number, fallback: number = 0): number => {
           const val = getVal(idx);
           if (!val) return fallback;
-          const clean = val.replace(/[\$,]/g, '');
+          const clean = val.replace(/[^0-9.-]/g, '');
           const n = parseFloat(clean);
           return isNaN(n) ? fallback : n;
         };
