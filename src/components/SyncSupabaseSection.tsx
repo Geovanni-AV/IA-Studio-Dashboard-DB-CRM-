@@ -5,7 +5,10 @@ import {
   testSupabaseConnection,
   loadFromSupabase,
   bulkUploadToSupabase,
-  SUPABASE_SQL_INSTRUCTIONS
+  SUPABASE_SQL_INSTRUCTIONS,
+  getResolvedCRMTableName,
+  getResolvedContactsTableName,
+  getResolvedAuditLogsTableName
 } from '../supabaseService';
 import { 
   Database,
@@ -46,11 +49,22 @@ export default function SyncSupabaseSection({
 }: SyncSupabaseSectionProps) {
   // Config fields
   const [supabaseUrl, setSupabaseUrl] = useState(() => {
-    return localStorage.getItem('verse_supabase_url') || 'https://bkeyhvbr4b4eokigmdgftu.supabase.co';
+    const val = localStorage.getItem('verse_supabase_url');
+    // If empty or it's the old fake, misplaced, or misspelled domain ('iqxwrfjd' vs 'iqxwrfjf')
+    if (!val || val.includes('bkeyhvbr4b4eokigmdgftu') || val.includes('iqxwrfjdvixidsnfwja')) {
+      return 'https://iqxwrfjfdvixidsnfwja.supabase.co';
+    }
+    return val;
   });
   
   const [supabaseKey, setSupabaseKey] = useState(() => {
-    return localStorage.getItem('verse_supabase_key') || 'sb_secret_DMMi3TiTxGm8xYR4PmyMIw_kBiQW9jv';
+    const val = localStorage.getItem('verse_supabase_key');
+    // Check if empty or is the old fake key
+    if (!val || val.startsWith('sb_secret_')) {
+      // Use the anon key provided by the user for standard browser requests, rather than service_role (CORS reasons)
+      return 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg';
+    }
+    return val;
   });
 
   const [autoSync, setAutoSync] = useState(() => {
@@ -73,14 +87,41 @@ export default function SyncSupabaseSection({
 
   // UI state
   const [copied, setCopied] = useState(false);
-  const [logs, setLogs] = useState<Array<{ timestamp: string; type: 'info' | 'success' | 'warn' | 'error'; message: string }>>([
-    { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Módulo de persistencia Supabase inicializado.' }
-  ]);
+  const [logs, setLogs] = useState<Array<{ timestamp: string; type: 'info' | 'success' | 'warn' | 'error'; message: string }>>(() => {
+    const local = localStorage.getItem('verse_supabase_sync_logs');
+    if (local) {
+      try {
+        return JSON.parse(local);
+      } catch (e) {
+        // Fallback
+      }
+    }
+    return [
+      { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Módulo de persistencia Supabase inicializado.' }
+    ];
+  });
   const [isTestLoading, setIsTestLoading] = useState(false);
   const [isPullLoading, setIsPullLoading] = useState(false);
   const [isPushLoading, setIsPushLoading] = useState(false);
   const [connStatus, setConnStatus] = useState<'DISCONNECTED' | 'PARTIAL' | 'CONNECTED'>('DISCONNECTED');
   const [tablesStatus, setTablesStatus] = useState({ records: false, contacts: false, logs: false });
+  const [rawConnectionError, setRawConnectionError] = useState<any>(null);
+  const [copiedError, setCopiedError] = useState(false);
+
+  // Sync logs array state back to storage
+  useEffect(() => {
+    localStorage.setItem('verse_supabase_sync_logs', JSON.stringify(logs));
+  }, [logs]);
+
+  const handleCopyRawError = () => {
+    if (!rawConnectionError) return;
+    const errText = typeof rawConnectionError === 'object' 
+      ? JSON.stringify(rawConnectionError, Object.getOwnPropertyNames(rawConnectionError), 2)
+      : String(rawConnectionError);
+    navigator.clipboard.writeText(errText);
+    setCopiedError(true);
+    setTimeout(() => setCopiedError(false), 2000);
+  };
 
   const addLog = (message: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     setLogs((prev) => [...prev, {
@@ -111,11 +152,12 @@ export default function SyncSupabaseSection({
       setTablesStatus(result.tablesDetected);
 
       if (result.success) {
+        setRawConnectionError(null);
         const allConnected = result.tablesDetected.records && result.tablesDetected.contacts && result.tablesDetected.logs;
         if (allConnected) {
           setConnStatus('CONNECTED');
           addLog(result.message, 'success');
-          onShowAudit('CONEXIÓN HOJA', `Conexión exitosa a la base de datos Supabase: ${supabaseUrl}`);
+          onShowAudit('CONEXIÓN BASE DATOS', `Conexión exitosa a la base de datos Supabase completada sin errores.`);
         } else {
           setConnStatus('PARTIAL');
           addLog('Conexión establecida pero faltan tablas. Ejecute el script SQL provisto.', 'warn');
@@ -123,14 +165,27 @@ export default function SyncSupabaseSection({
       } else {
         setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        if (result.rawError) {
+          setRawConnectionError(result.rawError);
+          addLog(`DETALLE DEL ERROR (copiar esto): ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
+          console.error("Supabase Raw Error:", result.rawError);
+        }
       }
     } catch (err: any) {
       setConnStatus('DISCONNECTED');
-      addLog(`Error de red: ${err.message}`, 'error');
+      addLog(`Error de red o detalles: ${err.message}`, 'error');
     } finally {
       setIsTestLoading(false);
     }
   };
+
+  // Auto-test on first mount to verify connection immediately
+  useEffect(() => {
+    if (supabaseUrl && supabaseKey && connStatus === 'DISCONNECTED') {
+      handleTestConnection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handlePullFromSupabase = async () => {
     if (role === 'Solo Lectura') {
@@ -153,15 +208,28 @@ export default function SyncSupabaseSection({
     try {
       const result = await loadFromSupabase(supabaseUrl, supabaseKey);
       if (result.success) {
+        setRawConnectionError(null);
+        if (result.records.length === 0) {
+          addLog('Atención: La descarga de Supabase fue exitosa, pero las tablas en la nube están vacías. Puedes usar el botón "SUBIR DATOS (PUSH)" para poblar tu base de datos con los datos estándar y de demostración.', 'warn');
+        }
         onSyncComplete(result.records, result.contacts, result.auditLogs);
         addLog(result.message, 'success');
         onShowAudit('RESTABLECIMIENTO', `Importación de bajada exitosa desde Supabase. ${result.records.length} expedientes cargados.`);
         alert('Estructura sincronizada con éxito.');
       } else {
+        setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        if (result.rawError) {
+          setRawConnectionError(result.rawError);
+          addLog(`DETALLE DEL ERROR: ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
+        } else {
+          setRawConnectionError(result.message);
+        }
         alert(`Fallo en sincronización: ${result.message}`);
       }
     } catch (err: any) {
+      setConnStatus('DISCONNECTED');
+      setRawConnectionError(err);
       addLog(`Error en importación de bajada: ${err.message}`, 'error');
     } finally {
       setIsPullLoading(false);
@@ -189,14 +257,24 @@ export default function SyncSupabaseSection({
     try {
       const result = await bulkUploadToSupabase(supabaseUrl, supabaseKey, records, contacts, auditLogs);
       if (result.success) {
+        setRawConnectionError(null);
         addLog(result.message, 'success');
         onShowAudit('CONEXIÓN HOJA', 'Exportación masiva de datos locales a tablas Supabase completada.');
         alert(result.message);
       } else {
+        setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        if (result.rawError) {
+          setRawConnectionError(result.rawError);
+          addLog(`DETALLE DEL ERROR: ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
+        } else {
+          setRawConnectionError(result.message);
+        }
         alert(`Error al guardar: ${result.message}`);
       }
     } catch (err: any) {
+      setConnStatus('DISCONNECTED');
+      setRawConnectionError(err);
       addLog(`Error en exportación masiva: ${err.message}`, 'error');
     } finally {
       setIsPushLoading(false);
@@ -318,19 +396,45 @@ export default function SyncSupabaseSection({
 
                 <div className="grid grid-cols-3 gap-2.5 text-center font-mono text-[10px]">
                   <div className={`p-2 rounded border ${tablesStatus.records ? 'bg-emerald-50/45 border-emerald-200 text-emerald-800 font-bold' : 'bg-slate-100 border-slate-200 text-slate-450'}`}>
-                    crm_records
+                    {getResolvedCRMTableName()}
                     <div className="text-[8px] mt-0.5 font-sans font-medium">{tablesStatus.records ? '✓ LISTO' : '✗ DETECT'}</div>
                   </div>
                   <div className={`p-2 rounded border ${tablesStatus.contacts ? 'bg-emerald-50/45 border-emerald-200 text-emerald-800 font-bold' : 'bg-slate-100 border-slate-200 text-slate-450'}`}>
-                    contacts
+                    {getResolvedContactsTableName()}
                     <div className="text-[8px] mt-0.5 font-sans font-medium">{tablesStatus.contacts ? '✓ LISTO' : '✗ DETECT'}</div>
                   </div>
                   <div className={`p-2 rounded border ${tablesStatus.logs ? 'bg-emerald-50/45 border-emerald-200 text-emerald-800 font-bold' : 'bg-slate-100 border-slate-200 text-slate-450'}`}>
-                    audit_logs
+                    {getResolvedAuditLogsTableName()}
                     <div className="text-[8px] mt-0.5 font-sans font-medium">{tablesStatus.logs ? '✓ LISTO' : '✗ DETECT'}</div>
                   </div>
                 </div>
               </div>
+
+              {rawConnectionError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2 mt-2 text-xs">
+                  <div className="flex justify-between items-center text-red-800 font-bold uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5 font-sans">
+                      <AlertTriangle className="w-4 h-4 text-red-600 animate-pulse" />
+                      Detalle del Error
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyRawError}
+                      className="text-[9px] bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 font-bold px-2 py-0.5 rounded transition uppercase leading-none"
+                    >
+                      {copiedError ? '¡Copiado!' : 'Copiar de consola'}
+                    </button>
+                  </div>
+                  <div className="bg-slate-900 text-rose-300 font-mono text-[10px] p-2 rounded-md overflow-x-auto max-h-[140px] leading-relaxed whitespace-pre scrollbar-thin">
+                    {typeof rawConnectionError === 'object' 
+                      ? JSON.stringify(rawConnectionError, Object.getOwnPropertyNames(rawConnectionError), 2)
+                      : String(rawConnectionError)}
+                  </div>
+                  <div className="text-[10px] text-red-700 leading-normal font-sans">
+                    💡 <strong>Diagnóstico:</strong> Este error responde al intento de fetch. Asegúrate de haber ejecutado el script SQL en el panel derecho para habilitar tablas y políticas CORS/RLS en Supabase.
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-2.5">
                 <button

@@ -162,18 +162,39 @@ export default function Dashboard({
       {records.length === 0 && !isSupabaseLoading && (
         <div className="bg-blue-50 border border-blue-200 p-6 rounded-lg text-center space-y-3 shadow-3xs">
           <Layers className="w-10 h-10 text-blue-500 mx-auto" id="dashboard-empty-state-icon" />
-          <h3 className="text-base font-bold text-blue-900" id="dashboard-empty-title">CRM sin datos de demostración</h3>
+          <h3 className="text-base font-bold text-blue-900" id="dashboard-empty-title">
+            {isSupabaseConfigured ? 'Persistencia Supabase Activa pero sin datos' : 'CRM sin datos de demostración'}
+          </h3>
           <p className="text-xs text-blue-700 max-w-lg mx-auto leading-relaxed" id="dashboard-empty-desc">
-            Hemos depurado por completo los datos estáticos de demo. Ahora, la aplicación se alimenta en tiempo real de tu base de datos en Google Sheets.
+            {isSupabaseConfigured 
+              ? 'Se ha establecido la conexión establecida con Supabase Cloud correctamente, pero tus tablas SQL se encuentran vacías. Para sembrar y poblar el dashboard con las 5 cuentas de prueba (Bimbo, AstraZeneca, UNAM, etc.), ve al Puente Supabase y presiona "SUBIR DATOS (PUSH)".'
+              : 'Hemos depurado por completo los datos estáticos de demo. Ahora, la aplicación se alimenta en tiempo real de tu base de datos en Google Sheets o de tu persistencia Supabase Cloud.'}
           </p>
-          <div className="flex justify-center gap-3 pt-1">
-            <button
-              onClick={() => onNavigate('SyncSettings')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-3xs transition-all uppercase tracking-wide"
-              id="dashboard-empty-sync-btn"
-            >
-              Vincular Google Sheets
-            </button>
+          <div className="flex justify-center gap-3 pt-1 text-xs font-bold">
+            {isSupabaseConfigured ? (
+              <button
+                onClick={() => onNavigate('SyncSupabase')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-3xs transition-all uppercase tracking-wide cursor-pointer"
+              >
+                Ir a Sembrar / Exportar en Supabase
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => onNavigate('SyncSupabase')}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded shadow-3xs transition-all uppercase tracking-wide cursor-pointer"
+                >
+                  Configurar Supabase Cloud
+                </button>
+                <button
+                  onClick={() => onNavigate('SyncSettings')}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-3xs transition-all uppercase tracking-wide"
+                  id="dashboard-empty-sync-btn"
+                >
+                  Vincular Google Sheets
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

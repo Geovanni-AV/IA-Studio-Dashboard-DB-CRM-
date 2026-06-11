@@ -10,7 +10,8 @@ import {
   deleteContactFromSupabase, 
   pushAuditLogToSupabase,
   loadFromSupabase,
-  bulkUploadToSupabase
+  bulkUploadToSupabase,
+  getResolvedCRMTableName
 } from './supabaseService';
 
 // Subcomponents
@@ -71,6 +72,7 @@ export default function App() {
 
   // States for loaders and feedback notifications
   const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<'LOADING' | 'CONNECTED' | 'ERROR' | 'OFFLINE'>('OFFLINE');
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'info' | null }>({
     show: false,
     message: '',
@@ -96,46 +98,133 @@ export default function App() {
 
   // Startup mount automatic check & load from Supabase Cloud
   useEffect(() => {
-    const fetchFromSupabaseOnStart = async () => {
-      const url = localStorage.getItem('verse_supabase_url') || '';
-      const key = localStorage.getItem('verse_supabase_key') || '';
-      if (url && key) {
-        // Skip automatic load and warning toasts for placeholder/demo values
-        if (
-          url === 'https://bkeyhvbr4b4eokigmdgftu.supabase.co' ||
-          key === 'sb_secret_DMMi3TiTxGm8xYR4PmyMIw_kBiQW9jv'
-        ) {
-          console.log('Filtro de inicio Supabase: Valores de demostración detectados. Omitiendo.');
-          return;
-        }
-
-        setIsSupabaseLoading(true);
+    const addSupabaseLogToStorage = (message: string, type: 'info' | 'success' | 'warn' | 'error') => {
+      const timestamp = new Date().toLocaleTimeString();
+      const localLogs = localStorage.getItem('verse_supabase_sync_logs');
+      let logArray = [];
+      if (localLogs) {
         try {
-          const result = await loadFromSupabase(url, key);
-          if (result.success) {
-            if (result.records && result.records.length > 0) {
-              setRecords(result.records);
-            }
-            if (result.contacts && result.contacts.length > 0) {
-              setContacts(result.contacts);
-            }
-            if (result.auditLogs && result.auditLogs.length > 0) {
-              setAuditLogs(result.auditLogs);
-            }
-            showToast('Sincronización inicial exitosa con Supabase Cloud', 'success');
-          } else {
-            console.warn('Fallo al cargar de Supabase en el arranque:', result.message);
-            showToast(`Fallo en carga inicial de Supabase: ${result.message}`, 'error');
-          }
-        } catch (error: any) {
-          console.error('Error al iniciar persistencia Supabase:', error);
-          showToast(`Error de conexión con Supabase: ${error.message}`, 'error');
-        } finally {
-          setIsSupabaseLoading(false);
+          logArray = JSON.parse(localLogs);
+        } catch (e) {
+          logArray = [];
         }
       }
+      logArray.push({ timestamp, type, message });
+      if (logArray.length > 200) {
+        logArray = logArray.slice(-200);
+      }
+      localStorage.setItem('verse_supabase_sync_logs', JSON.stringify(logArray));
     };
-    fetchFromSupabaseOnStart();
+
+    const fetchFromSupabaseOnStart = async () => {
+      let url = localStorage.getItem('verse_supabase_url') || '';
+      let key = localStorage.getItem('verse_supabase_key') || '';
+      
+      // Auto-correct any misspelled, outdated, or empty values on mount
+      if (!url || url.includes('bkeyhvbr4b4eokigmdgftu') || url.includes('iqxwrfjdvixidsnfwja')) {
+        url = 'https://iqxwrfjfdvixidsnfwja.supabase.co';
+        localStorage.setItem('verse_supabase_url', url);
+        addSupabaseLogToStorage('Se corrigió el host de Supabase por defecto a la URL correcta.', 'info');
+      }
+      if (!key || key.startsWith('sb_secret_')) {
+        key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg';
+        localStorage.setItem('verse_supabase_key', key);
+        addSupabaseLogToStorage('Se corrigió la clave API Anon Key de Supabase por defecto.', 'info');
+      }
+
+      let isFetchingInEffect = false;
+
+      const pullData = async (isAutoTrigger = false) => {
+        if (isFetchingInEffect) return;
+        isFetchingInEffect = true;
+
+        if (url && key) {
+          if (!isAutoTrigger) {
+            setIsSupabaseLoading(true);
+          }
+          setSupabaseStatus('LOADING');
+          if (isAutoTrigger) {
+            addSupabaseLogToStorage('Sincronización Automática: Verificando políticas RLS / Datos remotos...', 'info');
+          } else {
+            addSupabaseLogToStorage('Arranque: Iniciando descarga en segundo plano desde Supabase...', 'info');
+          }
+
+          try {
+            const result = await loadFromSupabase(url, key);
+            if (result.success) {
+              setRecords(result.records || []);
+              setContacts(result.contacts || []);
+              setAuditLogs(result.auditLogs || []);
+              setSupabaseStatus('CONNECTED');
+              
+              if (result.records.length > 0) {
+                addSupabaseLogToStorage(`¡Sincronización reactiva exitosa! ${result.records.length} expedientes cargados desde la base de datos remota.`, 'success');
+                if (isAutoTrigger) {
+                  showToast(`Sincronización en tiempo real: ${result.records.length} expedientes importados`, 'success');
+                } else {
+                  showToast('Sincronización inicial exitosa con Supabase Cloud', 'success');
+                }
+              } else {
+                addSupabaseLogToStorage(`Conectado, pero se descargaron 0 registros de "${getResolvedCRMTableName()}". Si aplicaste el RLS, tu tabla podría estar vacía o se requiere un primer PUSH.`, 'warn');
+                if (isAutoTrigger) {
+                  showToast('Conectado a la base de datos (0 expedientes detectados)', 'info');
+                }
+              }
+            } else {
+              console.warn('Fallo al cargar de Supabase:', result.message);
+              setSupabaseStatus('ERROR');
+              addSupabaseLogToStorage(`Fallo en conexión: ${result.message}`, 'error');
+            }
+          } catch (error: any) {
+            console.error('Error durante sincronización reactiva:', error);
+            setSupabaseStatus('ERROR');
+            addSupabaseLogToStorage(`Error crítico de persistencia: ${error.message || error}`, 'error');
+          } finally {
+            if (!isAutoTrigger) {
+              setIsSupabaseLoading(false);
+            }
+            isFetchingInEffect = false;
+          }
+        } else {
+          addSupabaseLogToStorage('Arranque: No hay credenciales de Supabase guardadas en el navegador, operando en caché local.', 'warn');
+          isFetchingInEffect = false;
+        }
+      };
+
+      // Run on startup
+      await pullData(false);
+
+      // Trigger automatic pulls on window focus (helps import immediately when returning from Supabase tab)
+      const handleFocus = () => {
+        addSupabaseLogToStorage('Ventana enfocada: Activando actualización en tiempo real desde Supabase...', 'info');
+        pullData(true);
+      };
+
+      window.addEventListener('focus', handleFocus);
+
+      // Setup continuous background polling (every 15 seconds) to catch RLS resolution or external updates
+      const intervalId = setInterval(() => {
+        pullData(true);
+      }, 15000);
+
+      return () => {
+        window.removeEventListener('focus', handleFocus);
+        clearInterval(intervalId);
+      };
+    };
+
+    let cleanupFn: (() => void) | undefined;
+    fetchFromSupabaseOnStart().then(cleanup => {
+      if (typeof cleanup === 'function') {
+        cleanupFn = cleanup;
+      }
+    });
+
+    return () => {
+      if (cleanupFn) {
+        cleanupFn();
+      }
+    };
   }, []);
 
   // Capture OAuth Access Token redirect inside Google's auth popup window
@@ -793,15 +882,9 @@ export default function App() {
                 contacts={contacts}
                 auditLogs={auditLogs}
                 onSyncComplete={(syncedRecords, syncedContacts, syncedLogs) => {
-                  if (syncedRecords && syncedRecords.length > 0) {
-                    setRecords(syncedRecords);
-                  }
-                  if (syncedContacts && syncedContacts.length > 0) {
-                    setContacts(syncedContacts);
-                  }
-                  if (syncedLogs && syncedLogs.length > 0) {
-                    setAuditLogs(syncedLogs);
-                  }
+                  setRecords(syncedRecords || []);
+                  setContacts(syncedContacts || []);
+                  setAuditLogs(syncedLogs || []);
                 }}
                 onShowAudit={appendAuditLog}
               />
@@ -814,12 +897,34 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                 <span className="text-[10px] font-bold text-slate-505 uppercase tracking-wide">
-                  Sincronizado con Google Sheets Live (100% Consistencia)
+                  G-Sheets Live
                 </span>
               </div>
               <div className="h-4 w-px bg-slate-200"></div>
-              <div className="text-[10px] text-slate-400 font-mono truncate max-w-[400px]">
-                Bitácora activa: [Operador: geovanni@verse-technology.com] {auditLogs.length > 0 ? `ÚLTIMO: ${auditLogs[0].accion} - ${auditLogs[0].detalles.substring(0, 45)}...` : 'Listo'}
+              
+              {/* SUPABASE STATUS INDICATOR */}
+              <div className="flex items-center gap-2 cursor-pointer transition-opacity hover:opacity-80" onClick={() => setActiveTab('SyncSupabase')} title="Clic para ver configuración de Supabase">
+                <span className={`w-2 h-2 rounded-full ${
+                  supabaseStatus === 'CONNECTED' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' :
+                  supabaseStatus === 'ERROR' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] animate-pulse' :
+                  supabaseStatus === 'LOADING' ? 'bg-amber-400 animate-pulse' :
+                  'bg-slate-300'
+                }`}></span>
+                <span className={`text-[10px] font-bold uppercase tracking-wide ${
+                  supabaseStatus === 'ERROR' ? 'text-red-500' : 'text-slate-505'
+                }`}>
+                  Supabase Cloud {
+                    supabaseStatus === 'CONNECTED' ? '(Conectado)' :
+                    supabaseStatus === 'ERROR' ? '(Error de Conexión)' :
+                    supabaseStatus === 'LOADING' ? '(Conectando...)' :
+                    '(Desconectado)'
+                  }
+                </span>
+              </div>
+              
+              <div className="h-4 w-px bg-slate-200"></div>
+              <div className="text-[10px] text-slate-400 font-mono truncate max-w-[300px] lg:max-w-[400px]">
+                Bitácora activa: [Operador: geovanni...] {auditLogs.length > 0 ? `ÚLTIMO: ${auditLogs[0].accion} - ${auditLogs[0].detalles.substring(0, 45)}...` : 'Listo'}
               </div>
             </div>
             
