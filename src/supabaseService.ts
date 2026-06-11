@@ -176,19 +176,48 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
     if (audErr) throw new Error(`audit_logs: ${audErr.message}`);
 
     // Map any JSON column conversions if needed (acciones_seguimiento is stored as JSONB)
-    const records: CRMRecord[] = (recData || []).map((r) => ({
-      ...r,
-      acciones_seguimiento: Array.isArray(r.acciones_seguimiento) 
+    const records: CRMRecord[] = (recData || []).map((r) => {
+      const acciones_parsed = Array.isArray(r.acciones_seguimiento) 
         ? r.acciones_seguimiento 
         : (typeof r.acciones_seguimiento === 'string' 
             ? JSON.parse(r.acciones_seguimiento) 
-            : [])
-    }));
+            : []);
+      
+      const hardware = Number(r.total_hardware_cotizacion) || 0;
+      const servicios = Number(r.total_servicios_cotizacion) || 0;
+      const subtotal = hardware + servicios;
+      const iva = parseFloat((subtotal * 0.16).toFixed(2));
+      const general = parseFloat((subtotal + iva).toFixed(2));
 
-    const contacts: Contact[] = (conData || []).map((c) => ({
-      ...c,
-      esEnlaceComercial: !!c.esEnlaceComercial
-    }));
+      return {
+        ...r,
+        total_hardware_cotizacion: hardware,
+        total_servicios_cotizacion: servicios,
+        total_subtotal_cotizacion: subtotal,
+        total_iva_cotizacion: iva,
+        total_general_cotizacion: general,
+        acciones_seguimiento: acciones_parsed
+      };
+    });
+
+    const contacts: Contact[] = (conData || []).map((c) => {
+      // Validate camelCase / snake_case / lowercase field for esEnlaceComercial
+      const esEnlaceComercialVal = 
+        c.esEnlaceComercial !== undefined ? c.esEnlaceComercial : 
+        c.esenlacecomercial !== undefined ? c.esenlacecomercial : 
+        c.es_enlace_comercial !== undefined ? c.es_enlace_comercial : false;
+
+      return {
+        id: c.id,
+        nombre: c.nombre || '',
+        puesto: c.puesto || '',
+        cliente: c.cliente || '',
+        planta: c.planta || '',
+        email: c.email || '',
+        telefono: c.telefono || '',
+        esEnlaceComercial: !!esEnlaceComercialVal
+      };
+    });
 
     const auditLogs: AuditLog[] = audData || [];
 
@@ -223,7 +252,13 @@ export async function pushCRMRecordToSupabase(
   if (!client) return false;
 
   try {
-    // Format payload matching schema
+    // Format payload matching schema and apply strict math formulas for 16% VAT
+    const hardware = Number(record.total_hardware_cotizacion) || 0;
+    const servicios = Number(record.total_servicios_cotizacion) || 0;
+    const subtotal = hardware + servicios;
+    const iva = parseFloat((subtotal * 0.16).toFixed(2));
+    const general = parseFloat((subtotal + iva).toFixed(2));
+
     const payload = {
       id: record.id,
       informacion_general_folio: record.informacion_general_folio,
@@ -234,11 +269,11 @@ export async function pushCRMRecordToSupabase(
       cliente_ubicacion: record.cliente_ubicacion,
       informacion_general_proyecto: record.informacion_general_proyecto,
       informacion_general_link_cotizacion: record.informacion_general_link_cotizacion,
-      total_hardware_cotizacion: record.total_hardware_cotizacion,
-      total_servicios_cotizacion: record.total_servicios_cotizacion,
-      total_subtotal_cotizacion: record.total_subtotal_cotizacion,
-      total_iva_cotizacion: record.total_iva_cotizacion,
-      total_general_cotizacion: record.total_general_cotizacion,
+      total_hardware_cotizacion: hardware,
+      total_servicios_cotizacion: servicios,
+      total_subtotal_cotizacion: subtotal,
+      total_iva_cotizacion: iva,
+      total_general_cotizacion: general,
       informacion_general_moneda: record.informacion_general_moneda,
       status_proyecto: record.status_proyecto,
       folio_orden_compra: record.folio_orden_compra || null,

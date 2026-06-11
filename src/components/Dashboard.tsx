@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { CRMRecord, UserRole } from '../types';
-import { TrendingUp, CheckCircle, BarChart2, DollarSign, Globe, Award, Layers } from 'lucide-react';
+import { TrendingUp, CheckCircle, BarChart2, DollarSign, Globe, Award, Layers, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
   records: CRMRecord[];
   exchangeRate: number;
   currentCurrency: 'USD' | 'MXN';
   role: UserRole;
+  isSupabaseConfigured?: boolean;
+  isSupabaseLoading?: boolean;
   onEditRecord: (record: CRMRecord) => void;
   onNavigate: (tab: string) => void;
 }
@@ -16,6 +18,8 @@ export default function Dashboard({
   exchangeRate,
   currentCurrency,
   role,
+  isSupabaseConfigured,
+  isSupabaseLoading,
   onEditRecord,
   onNavigate
 }: DashboardProps) {
@@ -140,7 +144,22 @@ export default function Dashboard({
 
   return (
     <div className="space-y-6 fade-in" id="dashboard-tab-content">
-      {records.length === 0 && (
+      {isSupabaseLoading && (
+        <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg flex items-center justify-between shadow-3xs animate-pulse">
+          <div className="flex items-center gap-3">
+            <RefreshCw className="w-5 h-5 text-blue-600 animate-spin shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-blue-900">Sincronizando con Supabase Cloud...</p>
+              <p className="text-[10px] text-blue-700">Descargando expedientes comerciales, contactos validados de planta y bitácora fiscal...</p>
+            </div>
+          </div>
+          <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded uppercase tracking-wider font-mono shrink-0">
+            Carga Activa
+          </span>
+        </div>
+      )}
+
+      {records.length === 0 && !isSupabaseLoading && (
         <div className="bg-blue-50 border border-blue-200 p-6 rounded-lg text-center space-y-3 shadow-3xs">
           <Layers className="w-10 h-10 text-blue-500 mx-auto" id="dashboard-empty-state-icon" />
           <h3 className="text-base font-bold text-blue-900" id="dashboard-empty-title">CRM sin datos de demostración</h3>
@@ -171,8 +190,12 @@ export default function Dashboard({
         </div>
         <div className="flex gap-2">
           <div className="bg-white border border-slate-200 p-1 flex rounded-md shadow-3xs">
-            <span className="px-3 py-1 bg-emerald-50 text-emerald-800 font-mono font-bold text-[10px] rounded uppercase tracking-wider">
-              • Datos en Tiempo Real
+            <span className={`px-3 py-1 font-mono font-bold text-[10px] rounded uppercase tracking-wider ${
+              isSupabaseConfigured 
+                ? 'bg-blue-50 text-blue-800' 
+                : 'bg-emerald-50 text-emerald-800'
+            }`}>
+              • {isSupabaseConfigured ? 'Supabase Cloud Activo' : 'Persistencia Local'}
             </span>
           </div>
           <button

@@ -8,7 +8,9 @@ import {
   deleteCRMRecordFromSupabase, 
   pushContactToSupabase, 
   deleteContactFromSupabase, 
-  pushAuditLogToSupabase 
+  pushAuditLogToSupabase,
+  loadFromSupabase,
+  bulkUploadToSupabase
 } from './supabaseService';
 
 // Subcomponents
@@ -64,11 +66,68 @@ export default function App() {
   });
 
   const [currentCurrency, setCurrentCurrency] = useState<'USD' | 'MXN'>('USD');
-  const [activeTab, setActiveTab] = useState('Dashboard');
+  const [activeTab, setActiveTab ] = useState('Dashboard');
   const [pulseNotification, setPulseNotification] = useState(true);
+
+  // States for loaders and feedback notifications
+  const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'info' | null }>({
+    show: false,
+    message: '',
+    type: null
+  });
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info') => {
+    setToast({ show: true, message, type });
+  };
+
+  // Self-dismissing toast duration handler
+  useEffect(() => {
+    if (toast.show) {
+      const timer = setTimeout(() => {
+        setToast({ show: false, message: '', type: null });
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast.show]);
 
   // Sync state helpers
   const exchangeRate = 17.05; // Standard B2B Exchange Rate
+
+  // Startup mount automatic check & load from Supabase Cloud
+  useEffect(() => {
+    const fetchFromSupabaseOnStart = async () => {
+      const url = localStorage.getItem('verse_supabase_url') || '';
+      const key = localStorage.getItem('verse_supabase_key') || '';
+      if (url && key) {
+        setIsSupabaseLoading(true);
+        try {
+          const result = await loadFromSupabase(url, key);
+          if (result.success) {
+            if (result.records && result.records.length > 0) {
+              setRecords(result.records);
+            }
+            if (result.contacts && result.contacts.length > 0) {
+              setContacts(result.contacts);
+            }
+            if (result.auditLogs && result.auditLogs.length > 0) {
+              setAuditLogs(result.auditLogs);
+            }
+            showToast('Sincronización inicial exitosa con Supabase Cloud', 'success');
+          } else {
+            console.warn('Fallo al cargar de Supabase en el arranque:', result.message);
+            showToast(`Fallo en carga inicial de Supabase: ${result.message}`, 'error');
+          }
+        } catch (error: any) {
+          console.error('Error al iniciar persistencia Supabase:', error);
+          showToast(`Error de conexión con Supabase: ${error.message}`, 'error');
+        } finally {
+          setIsSupabaseLoading(false);
+        }
+      }
+    };
+    fetchFromSupabaseOnStart();
+  }, []);
 
   // Capture OAuth Access Token redirect inside Google's auth popup window
   useEffect(() => {
@@ -103,7 +162,7 @@ export default function App() {
     localStorage.setItem('verse_crm_role', role);
   }, [role]);
 
-  // Helper to trigger Supabase sync if enabled
+  // Helper to trigger Supabase sync if enabled with visual feedback toasts
   const syncCRMRecordToSupabaseIfNeeded = async (record: CRMRecord, action: 'UPSERT' | 'DELETE') => {
     const url = localStorage.getItem('verse_supabase_url') || '';
     const key = localStorage.getItem('verse_supabase_key') || '';
@@ -112,12 +171,23 @@ export default function App() {
 
     try {
       if (action === 'DELETE') {
-        await deleteCRMRecordFromSupabase(url, key, record.id);
+        const success = await deleteCRMRecordFromSupabase(url, key, record.id);
+        if (success) {
+          showToast(`Expediente ${record.informacion_general_folio} eliminado de Supabase`, 'success');
+        } else {
+          showToast(`Error al eliminar expediente ${record.informacion_general_folio}`, 'error');
+        }
       } else {
-        await pushCRMRecordToSupabase(url, key, record);
+        const success = await pushCRMRecordToSupabase(url, key, record);
+        if (success) {
+          showToast(`Expediente ${record.informacion_general_folio} sincronizado con Supabase`, 'success');
+        } else {
+          showToast(`Error al sincronizar expediente ${record.informacion_general_folio}`, 'error');
+        }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Errores de comunicación en background con Supabase auto-sync:', e);
+      showToast(`Error de red con Supabase (Expediente): ${e.message}`, 'error');
     }
   };
 
@@ -129,12 +199,23 @@ export default function App() {
 
     try {
       if (action === 'DELETE') {
-        await deleteContactFromSupabase(url, key, contact.id);
+        const success = await deleteContactFromSupabase(url, key, contact.id);
+        if (success) {
+          showToast(`Contacto ${contact.nombre} eliminado de Supabase`, 'success');
+        } else {
+          showToast(`Error al eliminar contacto ${contact.nombre}`, 'error');
+        }
       } else {
-        await pushContactToSupabase(url, key, contact);
+        const success = await pushContactToSupabase(url, key, contact);
+        if (success) {
+          showToast(`Contacto ${contact.nombre} sincronizado con Supabase`, 'success');
+        } else {
+          showToast(`Error al sincronizar contacto ${contact.nombre}`, 'error');
+        }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Errores de comunicación en background con Supabase auto-sync:', e);
+      showToast(`Error de red con Supabase (Contacto): ${e.message}`, 'error');
     }
   };
 
@@ -464,7 +545,9 @@ export default function App() {
                 Conexión segura SAT/ISO
               </span>
               <span className="text-xs text-slate-500">
-                Base de Datos: <strong className="text-slate-800">Local con persistencia activa</strong>
+                Base de Datos: <strong className={localStorage.getItem('verse_supabase_url') && localStorage.getItem('verse_supabase_key') ? "text-blue-600 font-bold" : "text-amber-600 font-medium"}>
+                  {localStorage.getItem('verse_supabase_url') && localStorage.getItem('verse_supabase_key') ? "Supabase Cloud Activa" : "Persistencia Local (Modo Demostración)"}
+                </strong>
               </span>
             </div>
 
@@ -535,6 +618,8 @@ export default function App() {
                 exchangeRate={exchangeRate}
                 currentCurrency={currentCurrency}
                 role={role}
+                isSupabaseConfigured={!!(localStorage.getItem('verse_supabase_url') && localStorage.getItem('verse_supabase_key'))}
+                isSupabaseLoading={isSupabaseLoading}
                 onEditRecord={(rec) => {
                   setActiveTab('Leads/Projects');
                 }}
@@ -669,9 +754,30 @@ export default function App() {
               <SyncSettingsSection
                 role={role}
                 onResetDatabase={handleResetDatabase}
-                onSyncComplete={(responseLogs, syncedRecords) => {
+                onSyncComplete={async (responseLogs, syncedRecords) => {
                   if (syncedRecords && syncedRecords.length > 0) {
                     setRecords(syncedRecords);
+                    // Bilateral Sync to Supabase Cloud
+                    const url = localStorage.getItem('verse_supabase_url') || '';
+                    const key = localStorage.getItem('verse_supabase_key') || '';
+                    const autoSync = localStorage.getItem('verse_supabase_autosync') !== 'false';
+                    if (url && key && autoSync) {
+                      appendAuditLog('CONEXIÓN HOJA', `Iniciando propagación de ${syncedRecords.length} registros importados de Google Sheets hacia Supabase Cloud...`);
+                      showToast('Iniciando sincronización bilateral en Supabase Cloud...', 'info');
+                      try {
+                        const result = await bulkUploadToSupabase(url, key, syncedRecords, contacts, auditLogs);
+                        if (result.success) {
+                          appendAuditLog('CONEXIÓN HOJA', `Sincronización bilateral exitosa en Supabase Cloud. ${result.message}`);
+                          showToast('Ecosistema sincronizado bilateralmente en Supabase Cloud', 'success');
+                        } else {
+                          appendAuditLog('CONEXIÓN HOJA', `Fallo de propagación bilateral: ${result.message}`);
+                          showToast(`Fallo en propagación bilateral de Supabase: ${result.message}`, 'error');
+                        }
+                      } catch (err: any) {
+                        console.error('Error bilateral sync:', err);
+                        showToast(`Error al sincronizar con Supabase: ${err.message}`, 'error');
+                      }
+                    }
                   }
                   console.log('Sincronización finalizada correctamente.');
                 }}
@@ -724,6 +830,22 @@ export default function App() {
           </footer>
         </main>
       </div>
+
+      {/* REGISTRO / TOAST NOTIFICATION FLOATING PANEL */}
+      {toast.show && (
+        <div className="fixed bottom-14 right-5 z-50">
+          <div className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-xl border text-xs font-semibold ${
+            toast.type === 'success' 
+              ? 'bg-emerald-950/95 text-white border-emerald-500' 
+              : toast.type === 'error'
+                ? 'bg-red-950/95 text-white border-red-500 animate-pulse'
+                : 'bg-slate-900/95 text-white border-slate-700'
+          }`}>
+            <span className="w-2 h-2 rounded-full animate-ping bg-white shrink-0 font-bold"></span>
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

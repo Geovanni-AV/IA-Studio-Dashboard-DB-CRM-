@@ -159,40 +159,52 @@ export async function syncFromGoogleSheets(
           linkOcIdx = idx;
         } else if (text.includes('folio_orden_compra') || text.includes('folio oc') || text.includes('folio_oc') || (text.includes('folio') && (text.includes('compra') || text.includes('oc')))) {
           folioOcIdx = idx;
-        } else if (text.includes('status') || text.includes('estado')) {
-          statusIdx = idx;
-        } else if (text.includes('hardware')) {
+        } else if (text.includes('total_hardware_cotizacion') || text.includes('total_hardware')) {
           hardwareIdx = idx;
-        } else if (text.includes('servicios') || text.includes('servicio')) {
+        } else if (text.includes('total_servicios_cotizacion') || text.includes('total_servicios')) {
           serviciosIdx = idx;
-        } else if (text.includes('subtotal')) {
+        } else if (text.includes('total_subtotal_cotizacion')) {
           subtotalIdx = idx;
-        } else if (text.includes('iva')) {
+        } else if (text.includes('total_iva_cotizacion')) {
           ivaIdx = idx;
-        } else if (text.includes('link cotizacion') || text.includes('cotizacion') || text.includes('link_cotizacion')) {
-          linkCotizacionIdx = idx;
-        } else if (text.includes('total') && !text.includes('hardware') && !text.includes('servicios') && !text.includes('subtotal')) {
+        } else if (text.includes('total_general_cotizacion')) {
           totalIdx = idx;
-        } else if (text.includes('fecha_registro') || text === 'fecha registro' || text === 'registro' || (text.includes('fecha') && text.includes('registro'))) {
+        } else if (text.includes('link_cotizacion') || text.includes('link cotizacion') || text === 'link_cotizacion' || text === 'link cotizacion') {
+          linkCotizacionIdx = idx;
+        } else if (text.includes('cliente_pais') || text === 'pais' || text.includes('pais')) {
+          paisIdx = idx;
+        } else if (text.includes('cliente_ubicacion') || text === 'ubicacion' || text.includes('ubicacion')) {
+          ubicacionIdx = idx;
+        } else if (text.includes('fecha_registro') || text === 'fecha registro' || (text.includes('fecha') && text.includes('registro'))) {
           fechaIdx = idx;
-        } else if (text.includes('fecha') && (fechaIdx === 2 || fechaIdx === 0)) {
-          fechaIdx = idx;
+        } else if (text.includes('status_proyecto') || text === 'status' || text === 'estado' || text.includes('status') || text.includes('estado')) {
+          statusIdx = idx;
         } else if (text === 'folio' || (text.includes('folio') && !text.includes('oc') && !text.includes('compra'))) {
           folioIdx = idx;
-        } else if (text.includes('cliente')) {
+        } else if (text === 'hardware' || (text.includes('hardware') && !text.includes('total'))) {
+          hardwareIdx = idx;
+        } else if (text === 'servicios' || text === 'servicio' || ((text.includes('servicios') || text.includes('servicio')) && !text.includes('total'))) {
+          serviciosIdx = idx;
+        } else if (text === 'subtotal' || (text.includes('subtotal') && !text.includes('total'))) {
+          subtotalIdx = idx;
+        } else if (text === 'iva' || (text.includes('iva') && !text.includes('total'))) {
+          ivaIdx = idx;
+        } else if (text === 'total' || (text.includes('total') && !text.includes('hardware') && !text.includes('servicios') && !text.includes('subtotal') && !text.includes('iva'))) {
+          totalIdx = idx;
+        } else if (text === 'cliente' || (text.includes('cliente') && !text.includes('pais') && !text.includes('ubicacion'))) {
           clienteIdx = idx;
-        } else if (text.includes('planta')) {
+        } else if (text === 'planta' || text.includes('planta')) {
           plantaIdx = idx;
-        } else if (text.includes('pais')) {
-          paisIdx = idx;
-        } else if (text.includes('ubicacion')) {
-          ubicacionIdx = idx;
-        } else if (text.includes('proyecto')) {
+        } else if (text === 'proyecto' || text.includes('proyecto')) {
           proyectoIdx = idx;
-        } else if (text.includes('moneda')) {
+        } else if (text === 'moneda' || text.includes('moneda')) {
           monedaIdx = idx;
-        } else if (text.includes('notas')) {
+        } else if (text === 'notas' || text.includes('notas')) {
           notasIdx = idx;
+        } else if (text === 'cotizacion' || (text.includes('cotizacion') && !text.includes('hardware') && !text.includes('servicios') && !text.includes('subtotal') && !text.includes('iva') && !text.includes('total'))) {
+          linkCotizacionIdx = idx;
+        } else if (text.includes('fecha')) {
+          fechaIdx = idx;
         }
       });
       addLog(`Columnas identificadas dinámicamente: Folio=${folioIdx}, Cliente=${clienteIdx}, Estado=${statusIdx}, Hardware=${hardwareIdx}, Servicios=${serviciosIdx}.`, 'success');
