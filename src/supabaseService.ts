@@ -15,8 +15,19 @@ let cachedKey = '';
 
 export function getSupabaseClient(url: string, key: string): SupabaseClient | null {
   if (!url || !key) return null;
-  const cleanUrl = url.trim();
+  let cleanUrl = url.trim();
+  if (cleanUrl.endsWith('/')) {
+    cleanUrl = cleanUrl.slice(0, -1);
+  }
   const cleanKey = key.trim();
+
+  // Return null if using placeholder/demo values to avoid noisy startup connection errors
+  if (
+    cleanUrl === 'https://bkeyhvbr4b4eokigmdgftu.supabase.co' || 
+    cleanKey === 'sb_secret_DMMi3TiTxGm8xYR4PmyMIw_kBiQW9jv'
+  ) {
+    return null;
+  }
 
   // Return cached client if config has not changed
   if (cachedClient && cachedUrl === cleanUrl && cachedKey === cleanKey) {
@@ -46,6 +57,22 @@ export async function testSupabaseConnection(url: string, key: string): Promise<
   message: string;
   tablesDetected: { records: boolean; contacts: boolean; logs: boolean };
 }> {
+  const cleanUrl = url.trim();
+  const cleanKey = key.trim();
+
+  if (
+    !cleanUrl || 
+    !cleanKey || 
+    cleanUrl.includes('bkeyhvbr4b4eokigmdgftu.supabase.co') || 
+    cleanKey === 'sb_secret_DMMi3TiTxGm8xYR4PmyMIw_kBiQW9jv'
+  ) {
+    return {
+      success: false,
+      message: 'No se puede conectar con valores de demostración. Por favor configure la URL y Key reales de su propio proyecto Supabase.',
+      tablesDetected: { records: false, contacts: false, logs: false }
+    };
+  }
+
   const client = getSupabaseClient(url, key);
   if (!client) {
     return {
@@ -56,81 +83,86 @@ export async function testSupabaseConnection(url: string, key: string): Promise<
   }
 
   const status = { records: false, contacts: false, logs: false };
-  let errorCount = 0;
-  let errMsg = '';
+  let authOrNetworkError = false;
+  let genericErrorMessage = '';
 
-  // 1. Test crm_records table
-  try {
-    const { error } = await client.from('crm_records').select('id').limit(1);
-    if (!error) {
-      status.records = true;
-    } else {
-      if (error.code !== 'PGRST116') { // PGRST116 is row not found, which is fine
-        errMsg += `crm_records: ${error.message}. `;
-        errorCount++;
-      } else {
-        status.records = true;
+  const checkTable = async (tableName: string) => {
+    try {
+      const { error } = await client.from(tableName).select('id').limit(1);
+      if (!error) {
+        return { exists: true, error: null };
       }
+      
+      if (error.code === 'PGRST116') {
+        return { exists: true, error: null };
+      }
+      
+      // 42P01: Relation/Table does not exist. This proves we successfully authenticated and contacted Postgres!
+      if (
+        error.code === '42P01' || 
+        error.message?.includes('does not exist') || 
+        error.message?.includes('no existe la relación') || 
+        String((error as any).status) === '404'
+      ) {
+        return { exists: false, error: null };
+      }
+      
+      return { exists: false, error };
+    } catch (err: any) {
+      return { exists: false, error: err };
     }
-  } catch (err: any) {
-    errMsg += `crm_records_err: ${err.message}. `;
-    errorCount++;
+  };
+
+  // 1. Check crm_records
+  const resRecords = await checkTable('crm_records');
+  if (resRecords.exists) {
+    status.records = true;
+  } else if (resRecords.error) {
+    authOrNetworkError = true;
+    genericErrorMessage = resRecords.error.message || String(resRecords.error);
   }
 
-  // 2. Test contacts table
-  try {
-    const { error } = await client.from('contacts').select('id').limit(1);
-    if (!error) {
+  // 2. Check contacts
+  if (!authOrNetworkError) {
+    const resContacts = await checkTable('contacts');
+    if (resContacts.exists) {
       status.contacts = true;
-    } else {
-      if (error.code !== 'PGRST116') {
-        errMsg += `contacts: ${error.message}. `;
-        errorCount++;
-      } else {
-        status.contacts = true;
-      }
+    } else if (resContacts.error) {
+      authOrNetworkError = true;
+      genericErrorMessage = resContacts.error.message || String(resContacts.error);
     }
-  } catch (err: any) {
-    errMsg += `contacts_err: ${err.message}. `;
-    errorCount++;
   }
 
-  // 3. Test audit_logs table
-  try {
-    const { error } = await client.from('audit_logs').select('id').limit(1);
-    if (!error) {
+  // 3. Check audit_logs
+  if (!authOrNetworkError) {
+    const resLogs = await checkTable('audit_logs');
+    if (resLogs.exists) {
       status.logs = true;
-    } else {
-      if (error.code !== 'PGRST116') {
-        errMsg += `audit_logs: ${error.message}. `;
-        errorCount++;
-      } else {
-        status.logs = true;
-      }
+    } else if (resLogs.error) {
+      authOrNetworkError = true;
+      genericErrorMessage = resLogs.error.message || String(resLogs.error);
     }
-  } catch (err: any) {
-    errMsg += `audit_logs_err: ${err.message}. `;
-    errorCount++;
+  }
+
+  if (authOrNetworkError) {
+    return {
+      success: false,
+      message: `Error de conexión o autenticación con Supabase: ${genericErrorMessage}`,
+      tablesDetected: status
+    };
   }
 
   const allConnected = status.records && status.contacts && status.logs;
-
   if (allConnected) {
     return {
       success: true,
       message: '¡Conexión exitosa! Las 3 tablas requeridas fueron detectadas correctamente.',
       tablesDetected: status
     };
-  } else if (status.records || status.contacts || status.logs) {
-    return {
-      success: true,
-      message: 'Conectado de forma parcial. Faltan algunas tablas requeridas.',
-      tablesDetected: status
-    };
   } else {
     return {
-      success: false,
-      message: `Error de conexión o tablas faltantes: ${errMsg || 'No se pudo comunicar con la base de datos.'}`,
+      success: true, // True because connection details are verified as correct (we successfully reached DB!)
+      message: '¡Conectado exitosamente con Supabase! Sin embargo, faltan una o más tablas requeridas de la base de datos. Copia y ejecuta el script SQL provisto abajo en tu consola de Supabase para crearlas.',
       tablesDetected: status
     };
   }
@@ -535,15 +567,31 @@ alter table crm_records enable row level security;
 alter table contacts enable row level security;
 alter table audit_logs enable row level security;
 
+-- Limpiar políticas viejas si ya existen para evitar errores al re-ejecutar
+drop policy if exists "Permiso lectura libre" on crm_records;
+drop policy if exists "Permiso escritura libre" on crm_records;
+drop policy if exists "Permiso edicion libre" on crm_records;
+drop policy if exists "Permiso borrado libre" on crm_records;
+
 create policy "Permiso lectura libre" on crm_records for select using (true);
 create policy "Permiso escritura libre" on crm_records for insert with check (true);
 create policy "Permiso edicion libre" on crm_records for update using (true);
 create policy "Permiso borrado libre" on crm_records for delete using (true);
 
+drop policy if exists "Permiso lectura libre" on contacts;
+drop policy if exists "Permiso escritura libre" on contacts;
+drop policy if exists "Permiso edicion libre" on contacts;
+drop policy if exists "Permiso borrado libre" on contacts;
+
 create policy "Permiso lectura libre" on contacts for select using (true);
 create policy "Permiso escritura libre" on contacts for insert with check (true);
 create policy "Permiso edicion libre" on contacts for update using (true);
 create policy "Permiso borrado libre" on contacts for delete using (true);
+
+drop policy if exists "Permiso lectura libre" on audit_logs;
+drop policy if exists "Permiso escritura libre" on audit_logs;
+drop policy if exists "Permiso edicion libre" on audit_logs;
+drop policy if exists "Permiso borrado libre" on audit_logs;
 
 create policy "Permiso lectura libre" on audit_logs for select using (true);
 create policy "Permiso escritura libre" on audit_logs for insert with check (true);

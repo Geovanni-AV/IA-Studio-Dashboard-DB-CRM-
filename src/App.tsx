@@ -100,6 +100,15 @@ export default function App() {
       const url = localStorage.getItem('verse_supabase_url') || '';
       const key = localStorage.getItem('verse_supabase_key') || '';
       if (url && key) {
+        // Skip automatic load and warning toasts for placeholder/demo values
+        if (
+          url === 'https://bkeyhvbr4b4eokigmdgftu.supabase.co' ||
+          key === 'sb_secret_DMMi3TiTxGm8xYR4PmyMIw_kBiQW9jv'
+        ) {
+          console.log('Filtro de inicio Supabase: Valores de demostración detectados. Omitiendo.');
+          return;
+        }
+
         setIsSupabaseLoading(true);
         try {
           const result = await loadFromSupabase(url, key);
