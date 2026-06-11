@@ -1,0 +1,6 @@
+{
+  "name": "Verse CRM Inteligente",
+  "description": "Consola comercial inteligente para cotización, cierre y seguimiento logístico B2B en México, con sincronización de Google Sheets y roles simulados.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
