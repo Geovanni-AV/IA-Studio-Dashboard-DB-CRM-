@@ -2,6 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { CRMRecord, Contact, AuditLog, UserRole } from './types';
 import { INITIAL_RECORDS, INITIAL_CONTACTS, INITIAL_AUDIT_LOGS } from './mockData';
 import { pushToGoogleSheets } from './googleSheetsService';
+import SyncSupabaseSection from './components/SyncSupabaseSection';
+import { 
+  pushCRMRecordToSupabase, 
+  deleteCRMRecordFromSupabase, 
+  pushContactToSupabase, 
+  deleteContactFromSupabase, 
+  pushAuditLogToSupabase 
+} from './supabaseService';
 
 // Subcomponents
 import Dashboard from './components/Dashboard';
@@ -28,7 +36,8 @@ import {
   Circle,
   HelpCircle,
   Globe,
-  Plus
+  Plus,
+  Database
 } from 'lucide-react';
 
 export default function App() {
@@ -94,6 +103,54 @@ export default function App() {
     localStorage.setItem('verse_crm_role', role);
   }, [role]);
 
+  // Helper to trigger Supabase sync if enabled
+  const syncCRMRecordToSupabaseIfNeeded = async (record: CRMRecord, action: 'UPSERT' | 'DELETE') => {
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    const autoSync = localStorage.getItem('verse_supabase_autosync') !== 'false';
+    if (!url || !key || !autoSync) return;
+
+    try {
+      if (action === 'DELETE') {
+        await deleteCRMRecordFromSupabase(url, key, record.id);
+      } else {
+        await pushCRMRecordToSupabase(url, key, record);
+      }
+    } catch (e) {
+      console.warn('Errores de comunicación en background con Supabase auto-sync:', e);
+    }
+  };
+
+  const syncContactToSupabaseIfNeeded = async (contact: Contact, action: 'UPSERT' | 'DELETE') => {
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    const autoSync = localStorage.getItem('verse_supabase_autosync') !== 'false';
+    if (!url || !key || !autoSync) return;
+
+    try {
+      if (action === 'DELETE') {
+        await deleteContactFromSupabase(url, key, contact.id);
+      } else {
+        await pushContactToSupabase(url, key, contact);
+      }
+    } catch (e) {
+      console.warn('Errores de comunicación en background con Supabase auto-sync:', e);
+    }
+  };
+
+  const syncAuditLogToSupabaseIfNeeded = async (log: AuditLog) => {
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    const autoSync = localStorage.getItem('verse_supabase_autosync') !== 'false';
+    if (!url || !key || !autoSync) return;
+
+    try {
+      await pushAuditLogToSupabase(url, key, log);
+    } catch (e) {
+      console.warn('Errores de comunicación en background con Supabase auto-sync:', e);
+    }
+  };
+
   // Helper to append security logs
   const appendAuditLog = (accion: AuditLog['accion'], detalles: string) => {
     const newLog: AuditLog = {
@@ -105,6 +162,7 @@ export default function App() {
       detalles
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+    syncAuditLogToSupabaseIfNeeded(newLog);
   };
 
   // Restores standard factory demo values (Astra, Bimbo, UNAM)
@@ -366,6 +424,21 @@ export default function App() {
                 </span>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
               </button>
+
+              <button
+                onClick={() => setActiveTab('SyncSupabase')}
+                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                  activeTab === 'SyncSupabase'
+                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Database className="w-4 h-4 shrink-0" />
+                  Puente Supabase
+                </span>
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0"></span>
+              </button>
             </div>
           </div>
 
@@ -477,6 +550,7 @@ export default function App() {
                 role={role}
                 onAddRecord={(nRecord) => {
                   setRecords((prev) => [nRecord, ...prev]);
+                  syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');
                   const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
                   const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
                   const token = localStorage.getItem('verse_sheet_token') || '';
@@ -486,10 +560,13 @@ export default function App() {
                         appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} y sincronizó con Google Sheets.`);
                       }
                     });
+                  } else {
+                    appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
                   }
                 }}
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
                   const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
                   const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
                   const token = localStorage.getItem('verse_sheet_token') || '';
@@ -499,17 +576,24 @@ export default function App() {
                         appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} y sincronizó con Google Sheets.`);
                       }
                     });
+                  } else {
+                    appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
                   }
                 }}
                 onDeleteRecord={(delId) => {
                   const targetRecord = records.find(item => item.id === delId);
                   setRecords((prev) => prev.filter((item) => item.id !== delId));
                   if (targetRecord) {
+                    syncCRMRecordToSupabaseIfNeeded(targetRecord, 'DELETE');
                     const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
                     const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
                     const token = localStorage.getItem('verse_sheet_token') || '';
                     if (sheetUrl) {
-                      pushToGoogleSheets(sheetUrl, targetRecord, 'DELETE', apiKey, token);
+                      pushToGoogleSheets(sheetUrl, targetRecord, 'DELETE', apiKey, token).then(res => {
+                        appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} y notificó a Google Sheets.`);
+                      });
+                    } else {
+                      appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
                     }
                   }
                 }}
@@ -527,6 +611,14 @@ export default function App() {
                 role={role}
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
+                  // Trigger sheet support if configured
+                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
+                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
+                  const token = localStorage.getItem('verse_sheet_token') || '';
+                  if (sheetUrl) {
+                    pushToGoogleSheets(sheetUrl, uRecord, 'UPDATE', apiKey, token);
+                  }
                 }}
                 onShowAudit={appendAuditLog}
               />
@@ -536,8 +628,17 @@ export default function App() {
               <ContactsSection
                 contacts={contacts}
                 role={role}
-                onAddContact={(nCon) => setContacts((prev) => [nCon, ...prev])}
-                onDeleteContact={(delId) => setContacts((prev) => prev.filter((item) => item.id !== delId))}
+                onAddContact={(nCon) => {
+                  setContacts((prev) => [nCon, ...prev]);
+                  syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
+                }}
+                onDeleteContact={(delId) => {
+                  const targetContact = contacts.find(c => c.id === delId);
+                  setContacts((prev) => prev.filter((item) => item.id !== delId));
+                  if (targetContact) {
+                    syncContactToSupabaseIfNeeded(targetContact, 'DELETE');
+                  }
+                }}
                 onShowAudit={appendAuditLog}
               />
             )}
@@ -548,6 +649,13 @@ export default function App() {
                 role={role}
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
+                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
+                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
+                  const token = localStorage.getItem('verse_sheet_token') || '';
+                  if (sheetUrl) {
+                    pushToGoogleSheets(sheetUrl, uRecord, 'UPDATE', apiKey, token);
+                  }
                 }}
                 onShowAudit={appendAuditLog}
               />
@@ -566,6 +674,27 @@ export default function App() {
                     setRecords(syncedRecords);
                   }
                   console.log('Sincronización finalizada correctamente.');
+                }}
+                onShowAudit={appendAuditLog}
+              />
+            )}
+
+            {activeTab === 'SyncSupabase' && (
+              <SyncSupabaseSection
+                role={role}
+                records={records}
+                contacts={contacts}
+                auditLogs={auditLogs}
+                onSyncComplete={(syncedRecords, syncedContacts, syncedLogs) => {
+                  if (syncedRecords && syncedRecords.length > 0) {
+                    setRecords(syncedRecords);
+                  }
+                  if (syncedContacts && syncedContacts.length > 0) {
+                    setContacts(syncedContacts);
+                  }
+                  if (syncedLogs && syncedLogs.length > 0) {
+                    setAuditLogs(syncedLogs);
+                  }
                 }}
                 onShowAudit={appendAuditLog}
               />
