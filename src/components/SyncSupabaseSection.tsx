@@ -47,6 +47,43 @@ export default function SyncSupabaseSection({
   onSyncComplete,
   onShowAudit
 }: SyncSupabaseSectionProps) {
+  // Check if current user is the official infrastructure administrator (geovanni@verse-technology.com)
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('verse_google_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed?.email || '';
+      }
+    } catch (e) {}
+    return '';
+  });
+
+  useEffect(() => {
+    const checkEmail = () => {
+      try {
+        const saved = localStorage.getItem('verse_google_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed?.email !== currentUserEmail) {
+            setCurrentUserEmail(parsed?.email || '');
+          }
+        } else if (currentUserEmail) {
+          setCurrentUserEmail('');
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(checkEmail, 1000);
+    window.addEventListener('storage', checkEmail);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', checkEmail);
+    };
+  }, [currentUserEmail]);
+
+  const isInfraAdmin = currentUserEmail.toLowerCase() === 'geovanni@verse-technology.com';
+
   // Config fields
   const [supabaseUrl, setSupabaseUrl] = useState(() => {
     const val = localStorage.getItem('verse_supabase_url');
@@ -74,16 +111,22 @@ export default function SyncSupabaseSection({
 
   // Save values to localStorage
   useEffect(() => {
-    localStorage.setItem('verse_supabase_url', supabaseUrl);
-  }, [supabaseUrl]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_supabase_url', supabaseUrl);
+    }
+  }, [supabaseUrl, isInfraAdmin]);
 
   useEffect(() => {
-    localStorage.setItem('verse_supabase_key', supabaseKey);
-  }, [supabaseKey]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_supabase_key', supabaseKey);
+    }
+  }, [supabaseKey, isInfraAdmin]);
 
   useEffect(() => {
-    localStorage.setItem('verse_supabase_autosync', String(autoSync));
-  }, [autoSync]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_supabase_autosync', String(autoSync));
+    }
+  }, [autoSync, isInfraAdmin]);
 
   // UI state
   const [copied, setCopied] = useState(false);
@@ -139,6 +182,11 @@ export default function SyncSupabaseSection({
   };
 
   const handleTestConnection = async () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede comprobar la conexión con la base de datos Supabase.");
+      return;
+    }
+
     if (!supabaseUrl || !supabaseKey) {
       addLog('Error: Por favor complete la URL y la Key de Supabase antes de realizar pruebas.', 'error');
       return;
@@ -179,15 +227,30 @@ export default function SyncSupabaseSection({
     }
   };
 
-  // Auto-test on first mount to verify connection immediately
+  // Auto-test on first mount to verify connection immediately (only if admin is logged in, else mock standard loading or initial fetch)
   useEffect(() => {
     if (supabaseUrl && supabaseKey && connStatus === 'DISCONNECTED') {
-      handleTestConnection();
+      if (isInfraAdmin) {
+        handleTestConnection();
+      } else {
+        // Simple mock silent read of table metadata to keep standard UI status without throwing or alerting
+        testSupabaseConnection(supabaseUrl, supabaseKey).then((result) => {
+          setTablesStatus(result.tablesDetected);
+          if (result.success) {
+            setConnStatus(result.tablesDetected.records && result.tablesDetected.contacts && result.tablesDetected.logs ? 'CONNECTED' : 'PARTIAL');
+          }
+        }).catch(() => {});
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isInfraAdmin]);
 
   const handlePullFromSupabase = async () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede importar datos activos desde el puente de Supabase.");
+      return;
+    }
+
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: Tu perfil "${role}" no tiene privilegios para realizar sincronizaciones de bajada.`);
       return;
@@ -237,6 +300,11 @@ export default function SyncSupabaseSection({
   };
 
   const handlePushToSupabase = async () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede exportar datos activos hacia el puente de Supabase.");
+      return;
+    }
+
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: Tu perfil "${role}" no tiene privilegios para realizar sincronizaciones de subida.`);
       return;
@@ -306,6 +374,29 @@ export default function SyncSupabaseSection({
         </p>
       </div>
 
+      {/* BANNERS DE CONTROL EXCLUSIVO DE INFRAESTRUCTURA DE SUPABASE */}
+      {!isInfraAdmin ? (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-4 flex items-start gap-3 shadow-sm">
+          <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5 animate-bounce" />
+          <div className="text-xs space-y-1">
+            <p className="font-bold">Modo de Visualización Autorizado (Solo Lectura - Puente Cloud)</p>
+            <p className="leading-relaxed font-medium">
+              Panel de control de base de datos relacional integrado. Solo el Ingeniero Titular de infraestructura (<strong className="font-bold text-slate-900">geovanni@verse-technology.com</strong>) tiene facultades técnicas para testear configuraciones, editar secretos de API, re-establecer esquemas o detonar cargas/descargas en esta ventana.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-950 rounded-lg p-4 flex items-start gap-3 shadow-sm">
+          <ShieldCheck className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <p className="font-bold">Sesión Cloud del Administrador de Infraestructura Detectada</p>
+            <p className="leading-relaxed font-medium">
+              Bienvenido, <strong className="font-bold text-emerald-900">{currentUserEmail}</strong>. Tienes credenciales de lectura-escritura completas sobre las tablas Postgres, el router de sincronización automática y los disparadores de auditoría del backend.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-12 gap-5">
         
         {/* Supabase parameters setup */}
@@ -332,8 +423,15 @@ export default function SyncSupabaseSection({
                   type="url"
                   placeholder="https://xyz-proyecto.supabase.co"
                   value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                  className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-850 outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                  disabled={!isInfraAdmin}
+                  onChange={(e) => {
+                    if (!isInfraAdmin) {
+                      alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización de Supabase.");
+                      return;
+                    }
+                    setSupabaseUrl(e.target.value);
+                  }}
+                  className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-850 outline-none focus:ring-1 focus:ring-blue-500 font-mono disabled:opacity-75 disabled:cursor-not-allowed"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
                   Copia la URL de tu panel de control de Supabase (Settings &gt; API).
@@ -349,8 +447,15 @@ export default function SyncSupabaseSection({
                     type="password"
                     placeholder="sb_secret_..."
                     value={supabaseKey}
-                    onChange={(e) => setSupabaseKey(e.target.value)}
-                    className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-850 outline-none font-mono"
+                    disabled={!isInfraAdmin}
+                    onChange={(e) => {
+                      if (!isInfraAdmin) {
+                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización de Supabase.");
+                        return;
+                      }
+                      setSupabaseKey(e.target.value);
+                    }}
+                    className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-850 outline-none font-mono disabled:opacity-75 disabled:cursor-not-allowed"
                   />
                   {supabaseKey && (
                     <span className="absolute right-3 top-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-600 border border-blue-100 select-none">
@@ -375,8 +480,15 @@ export default function SyncSupabaseSection({
                   <input 
                     type="checkbox" 
                     checked={autoSync} 
-                    onChange={(e) => setAutoSync(e.target.checked)}
-                    className="sr-only peer"
+                    disabled={!isInfraAdmin}
+                    onChange={(e) => {
+                      if (!isInfraAdmin) {
+                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede habilitar/deshabilitar la sincronización automática de Supabase.");
+                        return;
+                      }
+                      setAutoSync(e.target.checked);
+                    }}
+                    className="sr-only peer disabled:cursor-not-allowed"
                   />
                   <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                 </label>
@@ -440,8 +552,8 @@ export default function SyncSupabaseSection({
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTestLoading}
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-lg transition-all flex justify-center items-center gap-1.5"
+                  disabled={isTestLoading || !isInfraAdmin}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-lg transition-all flex justify-center items-center gap-1.5 disabled:opacity-50 disabled:bg-slate-400 disabled:cursor-not-allowed"
                 >
                   {isTestLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-4 h-4 text-sky-400" />}
                   PROBAR CONEXIÓN
@@ -450,8 +562,8 @@ export default function SyncSupabaseSection({
                 <button
                   type="button"
                   onClick={handlePushToSupabase}
-                  disabled={isPushLoading || role === 'Solo Lectura'}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition-all flex justify-center items-center gap-1.5 disabled:opacity-50 disabled:bg-slate-400"
+                  disabled={isPushLoading || role === 'Solo Lectura' || !isInfraAdmin}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition-all flex justify-center items-center gap-1.5 disabled:opacity-50 disabled:bg-slate-400 disabled:cursor-not-allowed"
                 >
                   {isPushLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-4 h-4" />}
                   SUBIR DATOS (PUSH)
@@ -461,8 +573,8 @@ export default function SyncSupabaseSection({
               <button
                 type="button"
                 onClick={handlePullFromSupabase}
-                disabled={isPullLoading || role === 'Solo Lectura'}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-all flex justify-center items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:bg-slate-400"
+                disabled={isPullLoading || role === 'Solo Lectura' || !isInfraAdmin}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-all flex justify-center items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:bg-slate-400 disabled:cursor-not-allowed"
               >
                 {isPullLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4.5 h-4.5" />}
                 IMPORTAR DE SUPABASE (PULL / RESET)

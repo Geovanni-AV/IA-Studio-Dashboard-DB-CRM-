@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CRMRecord, UserRole } from '../types';
+import { CRMRecord, UserRole, FollowupEntry } from '../types';
 import { 
   Search, 
   Plus, 
@@ -83,6 +83,19 @@ export default function LeadsSection({
   const [formNotas, setFormNotas] = useState('');
   const [formSustituye, setFormSustituye] = useState('');
   
+  // Excel-like Column Sort & Filter states
+  const [sortColumn, setSortColumn] = useState<string>('');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [filterSearch, setFilterSearch] = useState<string>('');
+  
+  // Custom modal states for delete confirmation and PDF trigger
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [recordToDelete, setRecordToDelete] = useState<{ id: string; folio: string } | null>(null);
+  const [pdfPromptOpen, setPdfPromptOpen] = useState(false);
+  const [pdfPromptRecord, setPdfPromptRecord] = useState<CRMRecord | null>(null);
+  
   // Real-time calculated values
   const [subtotal, setSubtotal] = useState(0);
   const [iva, setIva] = useState(0);
@@ -102,7 +115,7 @@ export default function LeadsSection({
   // Reset page on filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, clientFilter, plantFilter, statusFilter, activeTabFilter, yearFilter, quarterFilter, temperatureFilter, regionFilter, amountFilter, startDateFilter, endDateFilter]);
+  }, [searchTerm, clientFilter, plantFilter, statusFilter, activeTabFilter, yearFilter, quarterFilter, temperatureFilter, regionFilter, amountFilter, startDateFilter, endDateFilter, colFilters]);
 
   // Open Form for creating
   const handleOpenCreateMode = () => {
@@ -148,21 +161,28 @@ export default function LeadsSection({
     setFormHardware(rec.total_hardware_cotizacion);
     setFormServicios(rec.total_servicios_cotizacion);
     setFormMoneda(rec.informacion_general_moneda);
-    setFormStatus(rec.status_proyecto);
+    setFormStatus(rec.estado_proyecto);
     setFormNotas(rec.notas_comerciales);
     setFormSustituye(rec.sustituye_folio_anterior || '');
     setIsFormOpen(true);
   };
 
-  // Delete Action
+  // Delete Action triggered by clicking the trash button
   const handleDelete = (id: string, folio: string) => {
     if (role !== 'Admin') {
       alert(`🔒 Acción Bloqueada: El rol actual "${role}" no tiene privilegios para eliminar folios definitivos.`);
       return;
     }
-    if (window.confirm(`¿Está seguro de que desea eliminar definitivamente el expediente comercial ${folio}? Esta acción no se puede deshacer.`)) {
-      onDeleteRecord(id);
-      onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${folio}`);
+    setRecordToDelete({ id, folio });
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDeleteActual = () => {
+    if (recordToDelete) {
+      onDeleteRecord(recordToDelete.id);
+      onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${recordToDelete.folio}`);
+      setDeleteConfirmOpen(false);
+      setRecordToDelete(null);
     }
   };
 
@@ -179,10 +199,20 @@ export default function LeadsSection({
       return;
     }
 
+    const existingRec = isEditing ? records.find(r => r.id === formId) : null;
+    let nextStatusProyecto = existingRec?.status_proyecto || 'Warm';
+    if (formStatus === 'Cerrado Ganado') {
+      nextStatusProyecto = 'Win';
+    } else if (formStatus === 'Negociación' && nextStatusProyecto === 'Win') {
+      nextStatusProyecto = 'Hot';
+    } else if (formStatus === 'Propuesta' && nextStatusProyecto === 'Win') {
+      nextStatusProyecto = 'Cool';
+    }
+
     const payload: CRMRecord = {
       id: formId || `rec_${Date.now()}`,
       informacion_general_folio: formFolio,
-      fecha_registro: new Date().toISOString().split('T')[0],
+      fecha_registro: existingRec?.fecha_registro || new Date().toISOString().split('T')[0],
       informacion_general_cliente: formCliente,
       informacion_general_planta: formPlanta,
       cliente_pais: formPais,
@@ -195,12 +225,17 @@ export default function LeadsSection({
       total_iva_cotizacion: iva,
       total_general_cotizacion: total,
       informacion_general_moneda: formMoneda,
-      status_proyecto: formStatus,
+      estado_proyecto: formStatus,
+      status_proyecto: nextStatusProyecto,
       notas_comerciales: formNotas,
       acciones_seguimiento: isEditing 
-        ? (records.find(r => r.id === formId)?.acciones_seguimiento || []) 
+        ? (existingRec?.acciones_seguimiento || []) 
         : [],
-      sustituye_folio_anterior: formSustituye || undefined
+      sustituye_folio_anterior: formSustituye || undefined,
+      link_orden_compra: existingRec?.link_orden_compra || undefined,
+      folio_orden_compra: existingRec?.folio_orden_compra || undefined,
+      fecha_inicio_proyecto: existingRec?.fecha_inicio_proyecto || undefined,
+      informacion_general_instalacion_incluida: existingRec?.informacion_general_instalacion_incluida ?? undefined
     };
 
     if (isEditing) {
@@ -228,20 +263,12 @@ export default function LeadsSection({
   };
 
   const getTemperature = (r: CRMRecord) => {
-    if (r.prioridad_nivel) return r.prioridad_nivel;
-    if (r.status_proyecto === 'Cerrado Ganado') return 'Win';
-    
-    // Check negotiation
-    if (r.status_proyecto === 'Negociación') {
-      const isHighValue = r.total_general_cotizacion >= 20000 || (r.informacion_general_moneda === 'MXN' && r.total_general_cotizacion >= 340000);
-      const hasManyFollowups = r.acciones_seguimiento && r.acciones_seguimiento.length >= 2;
-      return (isHighValue || hasManyFollowups) ? 'Hot' : 'Warm';
-    }
-    
-    // Propuesta
-    const hasFollowups = r.acciones_seguimiento && r.acciones_seguimiento.length > 0;
-    if (hasFollowups || r.total_general_cotizacion >= 40000) return 'Warm';
-    return 'Cool';
+    // Retorna directamente status_proyecto que almacena la prioridad/temperatura
+    if (r.status_proyecto === 'Win') return 'Win';
+    if (r.status_proyecto === 'Hot') return 'Hot';
+    if (r.status_proyecto === 'Warm') return 'Warm';
+    if (r.status_proyecto === 'Cool') return 'Cool';
+    return (r.status_proyecto || 'Warm') as 'Win' | 'Hot' | 'Warm' | 'Cool';
   };
 
   const getRegionGroup = (r: CRMRecord) => {
@@ -293,8 +320,8 @@ export default function LeadsSection({
     )
   ).sort();
 
-  // Filter pipeline logic
-  const filteredRecords = records.filter((r) => {
+  // Base filtration matching original top-bar custom selectors
+  const baseFiltered = records.filter((r) => {
     // 1. General search
     const matchesSearch =
       r.informacion_general_cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -305,14 +332,14 @@ export default function LeadsSection({
     // 2. Base filters
     const matchesClient = clientFilter === 'All' || r.informacion_general_cliente === clientFilter;
     const matchesPlant = plantFilter === 'All' || r.informacion_general_planta === plantFilter;
-    const matchesStatus = statusFilter === 'All' || r.status_proyecto === statusFilter;
+    const matchesStatus = statusFilter === 'All' || r.estado_proyecto === statusFilter;
 
     // 3. Tab filter (All, Activos, Cerrados)
     let matchesTab = true;
     if (activeTabFilter === 'active') {
-      matchesTab = r.status_proyecto === 'Propuesta' || r.status_proyecto === 'Negociación';
+      matchesTab = r.estado_proyecto === 'Propuesta' || r.estado_proyecto === 'Negociación';
     } else if (activeTabFilter === 'closed') {
-      matchesTab = r.status_proyecto === 'Cerrado Ganado';
+      matchesTab = r.estado_proyecto === 'Cerrado Ganado';
     }
 
     // 4. Year, Quarter, Date range
@@ -357,9 +384,205 @@ export default function LeadsSection({
     );
   });
 
+  // Apply Excel dynamic column filters
+  const filteredRecords = baseFiltered.filter((r) => {
+    for (const colKey of Object.keys(colFilters)) {
+      const activeValues = colFilters[colKey];
+      if (!activeValues || activeValues.length === 0) continue;
+      
+      let val = '';
+      if (colKey === 'folio') val = r.informacion_general_folio;
+      else if (colKey === 'client') val = r.informacion_general_cliente;
+      else if (colKey === 'plant') val = r.informacion_general_planta;
+      else if (colKey === 'project') val = r.informacion_general_proyecto;
+      else if (colKey === 'amount') {
+        val = r.total_general_cotizacion.toLocaleString('en-US', {
+          style: 'currency',
+          currency: r.informacion_general_moneda,
+          minimumFractionDigits: 0
+        });
+      }
+      else if (colKey === 'status') val = r.estado_proyecto;
+      else if (colKey === 'level') val = getTemperature(r);
+      else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas || 'S/N';
+      else if (colKey === 'oc') val = r.link_orden_compra || 'S/N';
+
+      if (!activeValues.includes(val)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // Unique column values based on full pool of records
+  const getUniqueColumnValues = (colKey: string) => {
+    const rawValues = records.map((r) => {
+      if (colKey === 'folio') return r.informacion_general_folio;
+      if (colKey === 'client') return r.informacion_general_cliente;
+      if (colKey === 'plant') return r.informacion_general_planta;
+      if (colKey === 'project') return r.informacion_general_proyecto;
+      if (colKey === 'amount') {
+        return r.total_general_cotizacion.toLocaleString('en-US', {
+          style: 'currency',
+          currency: r.informacion_general_moneda,
+          minimumFractionDigits: 0
+        });
+      }
+      if (colKey === 'status') return r.estado_proyecto;
+      if (colKey === 'level') return getTemperature(r);
+      if (colKey === 'actions_followup') return r.acciones_seguimiento?.[0]?.notas || 'S/N';
+      if (colKey === 'oc') return r.link_orden_compra || 'S/N';
+      return '';
+    }).filter(Boolean);
+    const sortedVals = Array.from(new Set(rawValues)).sort((a, b) => {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return sortedVals;
+  };
+
+  const getUniqueColValuesFiltered = (colKey: string) => {
+    const vals = getUniqueColumnValues(colKey);
+    if (!filterSearch) return vals;
+    return vals.filter(v => v.toLowerCase().includes(filterSearch.toLowerCase()));
+  };
+
+  const toggleDropdown = (colKey: string) => {
+    if (activeDropdown === colKey) {
+      setActiveDropdown(null);
+    } else {
+      setActiveDropdown(colKey);
+      setFilterSearch('');
+    }
+  };
+
+  const handleHeaderClick = (colKey: string) => {
+    setActiveDropdown(null);
+    if (sortColumn === colKey) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(colKey);
+      setSortDirection('asc');
+    }
+  };
+
+  const clearColumnFilter = (colKey: string) => {
+    setColFilters(prev => {
+      const copy = { ...prev };
+      delete copy[colKey];
+      return copy;
+    });
+  };
+
+  const isAllSelectedForCol = (colKey: string) => {
+    return !colFilters[colKey] || colFilters[colKey].length === 0;
+  };
+
+  const handleToggleSelectAllCol = (colKey: string, checked: boolean) => {
+    if (checked) {
+      clearColumnFilter(colKey);
+    } else {
+      setColFilters(prev => ({
+        ...prev,
+        [colKey]: []
+      }));
+    }
+  };
+
+  const isColValChecked = (colKey: string, val: string) => {
+    const activeVals = colFilters[colKey];
+    if (!activeVals) return true;
+    return activeVals.includes(val);
+  };
+
+  const handleToggleValChecked = (colKey: string, val: string) => {
+    setColFilters(prev => {
+      const activeVals = prev[colKey];
+      const allUnique = getUniqueColumnValues(colKey);
+      
+      let nextVals: string[];
+      if (!activeVals) {
+        nextVals = allUnique.filter(item => item !== val);
+      } else {
+        if (activeVals.includes(val)) {
+          nextVals = activeVals.filter(item => item !== val);
+        } else {
+          nextVals = [...activeVals, val];
+        }
+      }
+      
+      const copy = { ...prev };
+      if (nextVals.length === allUnique.length) {
+        delete copy[colKey];
+      } else {
+        copy[colKey] = nextVals;
+      }
+      return copy;
+    });
+  };
+
+  // Excel-like Sorting logic
+  const sortedRecords = [...filteredRecords].sort((a, b) => {
+    if (!sortColumn) return 0;
+    
+    let valA: any = '';
+    let valB: any = '';
+    
+    if (sortColumn === 'folio') {
+      valA = a.informacion_general_folio;
+      valB = b.informacion_general_folio;
+    } else if (sortColumn === 'client') {
+      valA = a.informacion_general_cliente;
+      valB = b.informacion_general_cliente;
+    } else if (sortColumn === 'plant') {
+      valA = a.informacion_general_planta;
+      valB = b.informacion_general_planta;
+    } else if (sortColumn === 'project') {
+      valA = a.informacion_general_proyecto;
+      valB = b.informacion_general_proyecto;
+    } else if (sortColumn === 'amount') {
+      const getUSD = (rec: CRMRecord) => {
+        let val = rec.total_general_cotizacion;
+        if (rec.informacion_general_moneda === 'MXN') {
+          val = rec.total_general_cotizacion / 17.05;
+        }
+        return val;
+      };
+      valA = getUSD(a);
+      valB = getUSD(b);
+    } else if (sortColumn === 'status') {
+      valA = a.estado_proyecto;
+      valB = b.estado_proyecto;
+    } else if (sortColumn === 'level') {
+      const getPriorityValue = (temp: string) => {
+        if (temp === 'Win') return 4;
+        if (temp === 'Hot') return 3;
+        if (temp === 'Warm') return 2;
+        return 1;
+      };
+      valA = getPriorityValue(getTemperature(a));
+      valB = getPriorityValue(getTemperature(b));
+    } else if (sortColumn === 'actions_followup') {
+      valA = a.acciones_seguimiento?.[0]?.notas || '';
+      valB = b.acciones_seguimiento?.[0]?.notas || '';
+    } else if (sortColumn === 'oc') {
+      valA = a.link_orden_compra || '';
+      valB = b.link_orden_compra || '';
+    }
+
+    if (typeof valA === 'string') {
+      return sortDirection === 'asc' 
+        ? valA.localeCompare(valB) 
+        : valB.localeCompare(valA);
+    } else {
+      return sortDirection === 'asc'
+        ? (valA > valB ? 1 : valA < valB ? -1 : 0)
+        : (valB > valA ? 1 : valB < valA ? -1 : 0);
+    }
+  });
+
   const paginatedRecords = pageSize === 'Todos'
-    ? filteredRecords
-    : filteredRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    ? sortedRecords
+    : sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // Calculate dynamic summary stats for search matching
   const totalCotizacionesUSD = filteredRecords.reduce((acc, r) => {
@@ -371,7 +594,7 @@ export default function LeadsSection({
   }, 0);
 
   const totalActivoUSD = filteredRecords
-    .filter((r) => r.status_proyecto !== 'Cerrado Ganado')
+    .filter((r) => r.estado_proyecto !== 'Cerrado Ganado')
     .reduce((acc, r) => {
       let val = r.total_general_cotizacion;
       if (r.informacion_general_moneda === 'MXN') {
@@ -381,6 +604,186 @@ export default function LeadsSection({
     }, 0);
 
   const averageQuotaUSD = filteredRecords.length > 0 ? (totalCotizacionesUSD / filteredRecords.length) : 0;
+
+  // helper to lock precise column widths across headers & row metrics
+  const getColWidthClass = (colKey: string) => {
+    if (colKey === 'folio') return 'w-[8%] min-w-[85px] max-w-[95px]';
+    if (colKey === 'client') return 'w-[12%] min-w-[110px] max-w-[130px]';
+    if (colKey === 'plant') return 'w-[12%] min-w-[110px] max-w-[130px]';
+    if (colKey === 'project') return 'w-[15%] min-w-[140px] max-w-[190px]';
+    if (colKey === 'amount') return 'w-[10%] min-w-[95px] max-w-[110px]';
+    if (colKey === 'status') return 'w-[9%] min-w-[100px] max-w-[115px]';
+    if (colKey === 'level') return 'w-[8%] min-w-[95px] max-w-[110px]';
+    if (colKey === 'actions_followup') return 'w-[15%] min-w-[140px] max-w-[185px]';
+    if (colKey === 'oc') return 'w-[11%] min-w-[115px] max-w-[145px]';
+    return '';
+  };
+
+  // Render Header Cell Helper with embedded dropdown
+  const renderHeaderCell = (colKey: string, label: string, alignment?: 'right' | 'center') => {
+    const isFiltered = colFilters[colKey] && colFilters[colKey].length > 0;
+    const isSorted = sortColumn === colKey;
+    const wClass = getColWidthClass(colKey);
+    
+    return (
+      <th className={`p-2.5 px-3 font-bold relative group/head ${wClass} ${
+        alignment === 'right' ? 'text-right' : alignment === 'center' ? 'text-center' : 'text-left'
+      }`}>
+        <div className={`flex items-center gap-1 w-full ${
+          alignment === 'right' ? 'justify-end' : alignment === 'center' ? 'justify-center' : 'justify-between'
+        }`}>
+          <button
+            type="button"
+            onClick={() => handleHeaderClick(colKey)} 
+            className="hover:text-slate-800 transition-colors flex items-center gap-1 font-semibold outline-none py-1.5 leading-none transition-all text-left"
+          >
+            <span>{label}</span>
+            {isSorted && (
+              sortDirection === 'asc' 
+                ? <ChevronUp className="w-3 h-3 text-[#1e40af] stroke-[2.5]" /> 
+                : <ChevronDown className="w-3 h-3 text-[#1e40af] stroke-[2.5]" />
+            )}
+          </button>
+          
+          <div className="relative flex items-center">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleDropdown(colKey);
+              }}
+              className={`p-1 rounded hover:bg-slate-200 transition-colors outline-none focus:ring-1 focus:ring-blue-400 ${
+                isFiltered 
+                  ? 'text-blue-700 bg-blue-100 border border-blue-200 shadow-3xs hover:bg-blue-150' 
+                  : 'text-slate-400 opacity-60 group-hover/head:opacity-100'
+              }`}
+              title="Filtros avanzados (estilo Excel)"
+            >
+              <Filter className="w-3 h-3 stroke-[2]" />
+            </button>
+            
+            {activeDropdown === colKey && (
+              <div 
+                className="absolute top-full mt-1.5 w-60 bg-white border border-slate-300 rounded-xl shadow-2xl z-50 text-left p-3.5 text-xs normal-case font-sans font-normal text-slate-800 animate-in fade-in slide-in-from-top-1.5 duration-150"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  right: alignment === 'right' || colKey === 'oc' || colKey === 'level' ? 0 : 'auto',
+                  left: alignment === 'right' || colKey === 'oc' || colKey === 'level' ? 'auto' : -4,
+                }}
+              >
+                {/* Excel style header */}
+                <div className="pb-2 border-b border-slate-150 flex items-center justify-between font-bold text-slate-900 text-[11px] tracking-wide">
+                  <span className="uppercase text-slate-500 text-[10px]">Filtrar {label}</span>
+                  <button 
+                    type="button" 
+                    onClick={() => setActiveDropdown(null)} 
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                
+                {/* Sort Actions */}
+                <div className="py-2 space-y-1 border-b border-slate-150">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSortColumn(colKey);
+                      setSortDirection('asc');
+                      setActiveDropdown(null);
+                    }}
+                    className="w-full text-left py-1 px-2 hover:bg-slate-100 rounded flex items-center gap-2 text-[11px] font-medium text-slate-700 transition-colors"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5 text-slate-450" />
+                    <span>A-Z / Menor a Mayor</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSortColumn(colKey);
+                      setSortDirection('desc');
+                      setActiveDropdown(null);
+                    }}
+                    className="w-full text-left py-1 px-2 hover:bg-slate-100 rounded flex items-center gap-2 text-[11px] font-medium text-slate-700 transition-colors"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-450" />
+                    <span>Z-A / Mayor a Menor</span>
+                  </button>
+                </div>
+                
+                {/* Unique Checkboxes search list */}
+                <div className="mt-2.5">
+                  <div className="relative mb-2">
+                    <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar en valores..."
+                      value={filterSearch}
+                      onChange={(e) => setFilterSearch(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 pl-8 pr-3 py-1.5 rounded-lg text-[11px] outline-none focus:ring-1 focus:ring-blue-500 font-sans focus:bg-white"
+                    />
+                  </div>
+                  
+                  {/* Option values with custom scroll */}
+                  <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 border border-slate-200 rounded-lg p-2 bg-slate-50">
+                    <label className="flex items-center gap-2 cursor-pointer py-0.5 hover:text-slate-900 select-none">
+                      <input
+                        type="checkbox"
+                        checked={isAllSelectedForCol(colKey)}
+                        onChange={(e) => handleToggleSelectAllCol(colKey, e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
+                      />
+                      <span className="font-bold text-slate-700 text-[11px]">(Seleccionar Todo)</span>
+                    </label>
+                    
+                    {getUniqueColValuesFiltered(colKey).map((valOption) => {
+                      const isChecked = isColValChecked(colKey, valOption);
+                      return (
+                        <label key={valOption} className="flex items-center gap-2 cursor-pointer py-0.5 hover:text-slate-900 select-none">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleValChecked(colKey, valOption)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
+                          />
+                          <span className="truncate text-slate-650 text-[11px]" title={valOption}>{valOption}</span>
+                        </label>
+                      );
+                    })}
+                    {getUniqueColValuesFiltered(colKey).length === 0 && (
+                      <p className="text-[10px] text-slate-400 text-center py-2">Sin coincidencias</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Foot actions */}
+                <div className="mt-3 flex gap-2 justify-between pt-2 border-t border-slate-150 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearColumnFilter(colKey);
+                      setActiveDropdown(null);
+                    }}
+                    className="px-2 py-1 text-red-650 hover:bg-red-50 rounded transition-colors font-medium animate-pulse"
+                  >
+                    Borrar Filtro
+                  </button>
+                  <button
+                    type="button"
+                    key={`apply-col-filter-${colKey}`}
+                    onClick={() => setActiveDropdown(null)}
+                    className="px-3 py-1 bg-[#1e40af] hover:bg-blue-800 text-white font-bold rounded-md transition-colors"
+                  >
+                    Confirmar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </th>
+    );
+  };
 
   return (
     <div className="space-y-6 fade-in">
@@ -465,7 +868,7 @@ export default function LeadsSection({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            🔥 Activos ({records.filter(r => r.status_proyecto !== 'Cerrado Ganado').length})
+            🔥 Activos ({records.filter(r => r.estado_proyecto !== 'Cerrado Ganado').length})
           </button>
           <button
             onClick={() => setActiveTabFilter('closed')}
@@ -475,7 +878,7 @@ export default function LeadsSection({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            🏆 Cerrados ({records.filter(r => r.status_proyecto === 'Cerrado Ganado').length})
+            🏆 Cerrados ({records.filter(r => r.estado_proyecto === 'Cerrado Ganado').length})
           </button>
         </div>
 
@@ -734,109 +1137,133 @@ export default function LeadsSection({
         )}
       </div>
 
-      {/* Main CRM records table */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-[#f8fafc] border-b border-slate-200 text-xs uppercase text-slate-500 font-label-caps">
-              <tr>
-                <th className="p-3.5 px-4 font-bold">Folio</th>
-                <th className="p-3.5 px-4 font-bold">Cliente</th>
-                <th className="p-3.5 px-4 font-bold">Planta Industrial</th>
-                <th className="p-3.5 px-4 font-bold">Descripción Proyecto</th>
-                <th className="p-3.5 px-4 font-bold text-right">Cotización Total</th>
-                <th className="p-3.5 px-4 font-bold">Estado</th>
-                <th className="p-3.5 px-4 font-bold text-center">Nivel / Termo</th>
-                <th className="p-3.5 px-4 font-bold text-center">Trazabilidad OC</th>
-                <th className="p-3.5 px-4 font-bold text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {paginatedRecords.length === 0 ? (
+      {/* Main CRM records table inside a 3D bevel elevated paper card */}
+      <div className="relative bg-slate-100/40 p-4 rounded-xl border border-slate-200 shadow-[inset_0_2px_4px_rgba(15,23,42,0.05)] mb-6">
+        <div className="bg-white border-t border-l border-slate-200 border-r-2 border-b-6 border-b-[#c3cbd5] border-r-[#e2e8f0] rounded-xl shadow-[0_20px_45px_-12px_rgba(15,23,42,0.18),_0_0_0_1px_rgba(15,23,42,0.03),_0_8px_16px_-8px_rgba(15,23,42,0.1)] overflow-hidden transition-all duration-300 hover:shadow-[0_26px_55px_-10px_rgba(15,23,42,0.22)] hover:translate-y-[-1px]">
+          <div className="overflow-x-auto max-h-[640px] overflow-y-auto scrollbar-thin min-h-[400px]">
+            <table className="w-full text-left border-collapse table-auto">
+              <thead className="bg-[#f8fafc] border-b-2 border-slate-200 text-xs uppercase text-slate-500 font-label-caps sticky top-0 z-20 shadow-2xs">
                 <tr>
-                   <td colSpan={9} className="p-8 text-center text-slate-400">
-                     Ningún registro mapea con los filtros definidos.
-                   </td>
+                  {renderHeaderCell('folio', 'Folio')}
+                  {renderHeaderCell('client', 'Cliente')}
+                  {renderHeaderCell('plant', 'Planta Industrial')}
+                  {renderHeaderCell('project', 'Descripción Proyecto')}
+                  {renderHeaderCell('amount', 'Cotización Total', 'right')}
+                  {renderHeaderCell('status', 'Estado')}
+                  {renderHeaderCell('level', 'Nivel / Termo', 'center')}
+                  {renderHeaderCell('actions_followup', 'Acciones', 'center')}
+                  {renderHeaderCell('oc', 'Ref OC / Trámite', 'center')}
+                  <th className="p-3 px-4 font-bold text-right text-slate-500 w-[8%] min-w-[100px] max-w-[120px]">Opciones</th>
                 </tr>
-              ) : (
-                paginatedRecords.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="p-3 px-4 font-bold font-data-mono text-[#004ddf] text-xs">
-                      {r.informacion_general_folio}
-                    </td>
-                    <td className="p-3 px-4 text-[#0b1c30]">
-                      <span className="font-bold">{r.informacion_general_cliente}</span>
-                    </td>
-                    <td className="p-3 px-4 text-slate-500">
-                      {r.informacion_general_planta}
-                    </td>
-                    <td className="p-3 px-4 text-slate-700 font-medium truncate max-w-[200px]">
-                      {r.informacion_general_proyecto}
-                    </td>
-                    <td className="p-3 px-4 text-right font-bold text-slate-900 font-data-mono">
-                      {r.total_general_cotizacion.toLocaleString('en-US', {
-                        style: 'currency',
-                        currency: r.informacion_general_moneda,
-                        minimumFractionDigits: 0
-                      })}
-                    </td>
-                    <td className="p-3 px-4">
-                      <span className={`inline-block px-2 text-[10px] font-bold py-0.5 rounded-full border ${
-                        r.status_proyecto === 'Cerrado Ganado' 
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
-                          : r.status_proyecto === 'Negociación'
-                            ? 'bg-amber-50 text-amber-700 border-amber-100'
-                            : 'bg-blue-50 text-blue-700 border-blue-100'
-                      }`}>
-                        {r.status_proyecto}
-                      </span>
-                    </td>
-                    <td className="p-3 px-4 text-center">
-                      <NivelTermoCell
-                        record={r}
-                        role={role}
-                        currentTemp={getTemperature(r)}
-                        onUpdate={onUpdateRecord}
-                      />
-                    </td>
-                    <td className="p-3 px-4 text-center">
-                      <TrazabilidadCell
-                        record={r}
-                        role={role}
-                        onUpdate={onUpdateRecord}
-                      />
-                    </td>
-                    <td className="p-3 px-4 text-right">
-                      <div className="flex justify-end gap-1.5">
-                        <button
-                          onClick={() => handleOpenDetail(r)}
-                          title="Ficha Técnica Completa"
-                          className="p-1 px-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenEditMode(r)}
-                          disabled={role === 'Solo Lectura'}
-                          className={`p-1 px-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded transition-colors ${role === 'Solo Lectura' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(r.id, r.informacion_general_folio)}
-                          disabled={role === 'Solo Lectura' || role === 'Vendedor'}
-                          title={role !== 'Admin' ? 'Acción restringida para Admin' : 'Eliminar Folio'}
-                          className={`p-1 px-1.5 border border-slate-200 bg-white hover:bg-red-50 text-red-600 rounded transition-colors ${role !== 'Admin' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+              </thead>
+              <tbody className="divide-y divide-slate-150 text-sm">
+                {paginatedRecords.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-slate-400">
+                      Ningún registro mapea con los filtros definidos.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  paginatedRecords.map((r) => (
+                    <tr 
+                      key={r.id} 
+                      className="border-b border-slate-200/80 last:border-b-0 odd:bg-white even:bg-slate-100/50 hover:bg-blue-50/30 transition-colors group"
+                    >
+                      <td className={`p-3 px-4 font-bold font-data-mono text-[#004ddf] text-xs truncate ${getColWidthClass('folio')}`}>
+                        {r.informacion_general_folio}
+                      </td>
+                      <td className={`p-3 px-4 text-[#0b1c30] truncate ${getColWidthClass('client')}`} title={r.informacion_general_cliente}>
+                        <span className="font-bold">{r.informacion_general_cliente}</span>
+                      </td>
+                      <td className={`p-3 px-4 text-slate-500 truncate ${getColWidthClass('plant')}`} title={r.informacion_general_planta}>
+                        {r.informacion_general_planta}
+                      </td>
+                      <td className={`p-3 px-4 text-slate-700 font-medium truncate ${getColWidthClass('project')}`} title={r.informacion_general_proyecto}>
+                        {r.informacion_general_proyecto}
+                      </td>
+                      <td className={`p-3 px-4 text-right font-bold text-slate-900 font-data-mono truncate ${getColWidthClass('amount')}`}>
+                        {r.total_general_cotizacion.toLocaleString('en-US', {
+                          style: 'currency',
+                          currency: r.informacion_general_moneda,
+                          minimumFractionDigits: 0
+                        })}
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('status')}`}>
+                        <EstadoCell
+                          record={r}
+                          role={role}
+                          onUpdate={onUpdateRecord}
+                        />
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('level')}`}>
+                        <NivelTermoCell
+                          record={r}
+                          role={role}
+                          currentTemp={getTemperature(r)}
+                          onUpdate={onUpdateRecord}
+                        />
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('actions_followup')}`}>
+                        <AccionesSeguimientoCell
+                          record={r}
+                          role={role}
+                          onUpdate={onUpdateRecord}
+                        />
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('oc')}`}>
+                        <TrazabilidadCell
+                          record={r}
+                          role={role}
+                          onUpdate={onUpdateRecord}
+                        />
+                      </td>
+                      <td className="p-3 px-4 text-right w-[8%] min-w-[100px] max-w-[120px]">
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            id={`pdf-btn-${r.id}`}
+                            onClick={() => {
+                              if (r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim().startsWith('http')) {
+                                window.open(r.informacion_general_link_cotizacion.trim(), '_blank');
+                              } else {
+                                setPdfPromptRecord(r);
+                                setPdfPromptOpen(true);
+                              }
+                            }}
+                            title={r.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
+                            className={`p-1.5 border rounded-lg transition-all shadow-3xs flex items-center justify-center ${
+                              r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim()
+                                ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 hover:shadow-2xs active:scale-95'
+                                : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 cursor-pointer active:scale-95'
+                            }`}
+                          >
+                            <FileText className="w-3.5 h-3.5 stroke-[2]" />
+                          </button>
+                          <button
+                            id={`edit-btn-${r.id}`}
+                            onClick={() => handleOpenEditMode(r)}
+                            disabled={role === 'Solo Lectura'}
+                            title="Editar fila"
+                            className={`p-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-lg transition-all shadow-3xs active:scale-95 ${role === 'Solo Lectura' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            id={`delete-btn-${r.id}`}
+                            onClick={() => handleDelete(r.id, r.informacion_general_folio)}
+                            disabled={role === 'Solo Lectura' || role === 'Vendedor'}
+                            title={role !== 'Admin' ? 'Acción restringida para Admin' : 'Eliminar Folio'}
+                            className={`p-1.5 border border-slate-200 bg-white hover:bg-red-50 text-red-600 rounded-lg transition-all shadow-3xs active:scale-95 ${role !== 'Admin' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {/* CONTROLES DE PAGINACIÓN */}
           {pageSize !== 'Todos' && filteredRecords.length > pageSize && (
@@ -1263,6 +1690,118 @@ export default function LeadsSection({
           </div>
         </div>
       )}
+
+      {/* MODAL: EXPLICIT 3D REMOVAL ALERT CONFIRMATION */}
+      {deleteConfirmOpen && recordToDelete && (
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-red-500 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-3 bg-red-50 rounded-full text-red-600 border border-red-100 shadow-[inset_0_1px_2px_rgba(239,68,68,0.1)]">
+                <Trash2 className="w-6 h-6 stroke-[2]" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                  ¿Confirmar Eliminación?
+                </h3>
+                <p className="text-xs text-slate-400 font-medium tracking-wide font-sans">OPERACIÓN OPERATIVA IRREVERSIBLE</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-650 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
+              Estás a punto de eliminar definitivamente el expediente comercial con Folio <strong className="font-bold text-red-600 font-data-mono">{recordToDelete.folio}</strong> de la base de datos de Supabase / Google Sheets. 
+              <span className="block mt-2 font-bold text-slate-800">
+                ⚠ Esta acción eliminará permanentemente la información, cotizaciones asociadas y el historial de trazabilidad del embudo.
+              </span>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setRecordToDelete(null);
+                }}
+                className="px-4 py-2 bg-slate-150 hover:bg-slate-200 text-slate-750 font-bold text-xs rounded-lg transition-all border border-slate-250 active:scale-95 cursor-pointer shadow-3xs"
+              >
+                No, Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteActual}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg shadow-2xs hover:shadow-xs transition-all flex items-center gap-1.5 active:scale-95 border-b-2 border-b-red-800 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Sí, Eliminar Registro
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PDF MISSING WARNING & HELP OPTIONS */}
+      {pdfPromptOpen && pdfPromptRecord && (
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-[#004ddf]/30 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-[#004ddf]">
+              <div className="p-3 bg-blue-50 text-blue-600 rounded-full border border-blue-100 shadow-[inset_0_1px_2px_rgba(0,77,223,0.05)]">
+                <FileText className="w-6 h-6 stroke-[2]" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                  Enlace de Cotización No Encontrado
+                </h3>
+                <p className="text-xs text-slate-400 font-medium">Folio: {pdfPromptRecord.informacion_general_folio}</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-650 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
+              No se ha registrado un enlace de Google Drive en la columna <code className="font-mono text-red-600 font-bold bg-white px-1.5 py-0.5 border border-slate-150 rounded">informacion_general_link_cotizacion</code> para el cliente <strong className="font-bold text-slate-900">{pdfPromptRecord.informacion_general_cliente}</strong>.
+              <p className="mt-2">
+                ¿Qué acción deseas realizar para este expediente?
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1 font-sans">
+              <button
+                type="button"
+                onClick={() => {
+                  setPdfPromptOpen(false);
+                  handleOpenDetail(pdfPromptRecord);
+                  setPdfPromptRecord(null);
+                }}
+                className="w-full text-left px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-[#0b1c30] text-xs font-bold rounded-lg transition-all flex items-center justify-between cursor-pointer shadow-3xs"
+              >
+                <span>🔎 Abrir Ficha Técnica Comercial Completa</span>
+                <span className="text-[10px] text-slate-400 font-mono font-medium">Detalles</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPdfPromptOpen(false);
+                  handleOpenEditMode(pdfPromptRecord);
+                  setPdfPromptRecord(null);
+                }}
+                className="w-full text-left px-4 py-2.5 bg-blue-50/50 hover:bg-blue-50 border border-blue-200 text-blue-800 text-xs font-bold rounded-lg transition-all flex items-center justify-between cursor-pointer shadow-3xs"
+              >
+                <span>✏️ Editar Expediente para Asignar Link PDF</span>
+                <span className="text-[10px] text-blue-600 font-mono font-medium">Editar</span>
+              </button>
+              <div className="flex justify-end mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPdfPromptOpen(false);
+                    setPdfPromptRecord(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-all border border-slate-250 cursor-pointer shadow-3xs active:scale-95"
+                >
+                  Entendido
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1370,6 +1909,185 @@ function TrazabilidadCell({
   );
 }
 
+function EstadoCell({
+  record,
+  role,
+  onUpdate
+}: {
+  record: CRMRecord;
+  role: string;
+  onUpdate: (rec: CRMRecord) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const options: ('Propuesta' | 'Negociación' | 'Cerrado Ganado')[] = ['Propuesta', 'Negociación', 'Cerrado Ganado'];
+
+  const getStatusBadgeClass = (status: string) => {
+    if (status === 'Cerrado Ganado') return 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100';
+    if (status === 'Negociación') return 'bg-amber-50 text-amber-700 border-amber-100 hover:bg-amber-100';
+    return 'bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100';
+  };
+
+  const handleSelect = (status: 'Propuesta' | 'Negociación' | 'Cerrado Ganado') => {
+    if (role === 'Solo Lectura') return;
+    
+    let nextStatusProyecto = record.status_proyecto;
+    if (status === 'Cerrado Ganado') {
+      nextStatusProyecto = 'Win';
+    } else if (status === 'Negociación' && nextStatusProyecto === 'Win') {
+      nextStatusProyecto = 'Hot';
+    } else if (status === 'Propuesta' && nextStatusProyecto === 'Win') {
+      nextStatusProyecto = 'Cool';
+    }
+
+    onUpdate({
+      ...record,
+      estado_proyecto: status,
+      status_proyecto: nextStatusProyecto
+    });
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative inline-block text-left" ref={dropdownRef}>
+      <button
+        type="button"
+        disabled={role === 'Solo Lectura'}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={`focus:outline-none transition-all active:scale-95 ${
+          role === 'Solo Lectura' ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:opacity-90'
+        }`}
+        title="Cambiar Fase Comercial"
+      >
+        <span className={`inline-block px-2 text-[10px] font-bold py-0.5 rounded-full border transition-all ${getStatusBadgeClass(record.estado_proyecto)}`}>
+          {record.estado_proyecto} <span className="ml-0.5 text-[8px] opacity-70">▼</span>
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 mt-1 w-36 bg-white border border-slate-200 rounded-lg shadow-xl z-50 py-1 divide-y divide-slate-100 animate-in fade-in duration-100">
+          <div className="px-1 py-1 text-[8px] uppercase tracking-wider font-bold text-slate-400 text-center select-none font-sans">
+            Fase Comercial
+          </div>
+          <div className="p-1 space-y-1">
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelect(opt);
+                }}
+                className={`w-full text-left px-2 py-1.5 text-xs font-semibold rounded hover:bg-slate-50 transition-colors flex items-center justify-between ${
+                  record.estado_proyecto === opt ? 'bg-slate-50/50 font-bold text-blue-700' : 'text-slate-700'
+                }`}
+              >
+                <span>{opt}</span>
+                {record.estado_proyecto === opt && <span className="text-[9px] text-blue-600">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccionesSeguimientoCell({ 
+  record, 
+  role, 
+  onUpdate 
+}: { 
+  record: CRMRecord; 
+  role: string; 
+  onUpdate: (rec: CRMRecord) => void; 
+}) {
+  const latestFollowup = record.acciones_seguimiento?.[0];
+  const [val, setVal] = useState(latestFollowup?.notas || '');
+
+  useEffect(() => {
+    setVal(latestFollowup?.notas || '');
+  }, [latestFollowup?.notas]);
+
+  const handleSave = () => {
+    const trimmed = val.trim();
+    const currentNotes = latestFollowup?.notas || '';
+    if (trimmed === currentNotes) return;
+
+    let updatedAcciones = [...(record.acciones_seguimiento || [])];
+
+    if (updatedAcciones.length === 0) {
+      if (trimmed) {
+        const isUserSaved = localStorage.getItem('verse_google_user');
+        let creatorName = role === 'Admin' ? 'Administrador' : 'Vendedor';
+        if (isUserSaved) {
+          try {
+            const parsed = JSON.parse(isUserSaved);
+            if (parsed?.name) creatorName = parsed.name;
+          } catch (e) {}
+        }
+        
+        const newEntry: FollowupEntry = {
+          id: `fl_${Date.now()}`,
+          fecha: new Date().toISOString().substring(0, 16).replace('T', ' '),
+          tipo: 'Llamada Telefónica',
+          creador: creatorName,
+          notas: trimmed
+        };
+        updatedAcciones = [newEntry];
+      }
+    } else {
+      updatedAcciones[0] = {
+        ...updatedAcciones[0],
+        notas: trimmed
+      };
+    }
+
+    onUpdate({ ...record, acciones_seguimiento: updatedAcciones });
+  };
+
+  return (
+    <div className="flex items-center gap-1 justify-center max-w-[200px] mx-auto select-text">
+      <input
+        type="text"
+        placeholder="SIN ACCIÓN..."
+        value={val}
+        disabled={role === 'Solo Lectura'}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            handleSave();
+            e.currentTarget.blur();
+          }
+        }}
+        className={`w-full text-center text-[10px] uppercase font-bold py-1 px-1.5 bg-slate-50 border border-slate-200 rounded font-data-mono hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none ${
+          latestFollowup?.notas ? 'text-indigo-700 bg-indigo-50 border-indigo-200 font-medium' : 'text-slate-400 font-normal italic'
+        }`}
+        title={latestFollowup?.notas || "Escribe para registrar/editar la última acción..."}
+      />
+    </div>
+  );
+}
+
 function NivelTermoCell({
   record,
   role,
@@ -1402,7 +2120,20 @@ function NivelTermoCell({
 
   const handleSelect = (lvl: 'Win' | 'Hot' | 'Warm' | 'Cool') => {
     if (role === 'Solo Lectura') return;
-    onUpdate({ ...record, prioridad_nivel: lvl });
+    let newStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
+    if (lvl === 'Win') {
+      newStatus = 'Cerrado Ganado';
+    } else if (lvl === 'Hot' || lvl === 'Warm') {
+      newStatus = 'Negociación';
+    } else {
+      newStatus = 'Propuesta';
+    }
+    onUpdate({ 
+      ...record, 
+      status_proyecto: lvl, 
+      estado_proyecto: newStatus,
+      prioridad_nivel: lvl
+    });
     setIsOpen(false);
   };
 

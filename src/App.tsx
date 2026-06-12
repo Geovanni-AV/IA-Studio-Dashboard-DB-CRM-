@@ -23,6 +23,7 @@ import ContactsSection from './components/ContactsSection';
 import FollowupsSection from './components/FollowupsSection';
 import AuditSection from './components/AuditSection';
 import SyncSettingsSection from './components/SyncSettingsSection';
+import SignInScreen from './components/ui/travel-connect-signin-1';
 
 // Icons
 import {
@@ -70,6 +71,24 @@ export default function App() {
   const [activeTab, setActiveTab ] = useState('Dashboard');
   const [pulseNotification, setPulseNotification] = useState(true);
 
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('verse_is_logged_in') === 'true';
+  });
+
+  const handleLoginSuccess = (email: string) => {
+    setIsAuthenticated(true);
+    localStorage.setItem('verse_is_logged_in', 'true');
+    const nameStr = email.includes('@') ? email.split('@')[0] : email;
+    const profile = {
+      name: nameStr.charAt(0).toUpperCase() + nameStr.slice(1),
+      email: email,
+      picture: ''
+    };
+    setGoogleUser(profile);
+    localStorage.setItem('verse_google_user', JSON.stringify(profile));
+    showToast(`¡Bienvenido, ${profile.name}! Sesión iniciada.`, 'success');
+  };
+
   // States for loaders and feedback notifications
   const [googleUser, setGoogleUser] = useState<{ name: string; email: string; picture: string } | null>(() => {
     const saved = localStorage.getItem('verse_google_user');
@@ -94,7 +113,9 @@ export default function App() {
         };
         setGoogleUser(profile);
         localStorage.setItem('verse_google_user', JSON.stringify(profile));
-        showToast(`¡Conexión autorizada! Bienvenido, ${profile.name}`, 'success');
+        setIsAuthenticated(true);
+        localStorage.setItem('verse_is_logged_in', 'true');
+        showToast(`¡Conexión Google Exitosa! Bienvenido, ${profile.name}`, 'success');
       } else {
         console.warn('Token inválido o expirado en el API de Google.');
       }
@@ -106,9 +127,11 @@ export default function App() {
   const handleDisconnectGoogle = () => {
     setGoogleUser(null);
     setGoogleToken('');
+    setIsAuthenticated(false);
     localStorage.removeItem('verse_sheet_token');
     localStorage.removeItem('verse_google_user');
-    showToast('Conexión con Google desvinculada.', 'info');
+    localStorage.removeItem('verse_is_logged_in');
+    showToast('Sesión de usuario cerrada con éxito y desconectada.', 'info');
   };
 
   const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
@@ -400,6 +423,10 @@ export default function App() {
     setAuditLogs([initialLog]);
   };
 
+  if (!isAuthenticated) {
+    return <SignInScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <div className="h-screen flex flex-col bg-slate-50 font-sans overflow-hidden text-slate-900 select-none antialiased">
       {/* BARRA DE SEGURIDAD SUPERIOR PREMIUM SLATE-900 */}
@@ -637,7 +664,7 @@ export default function App() {
                   Órdenes de Compra
                 </span>
                 <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold">
-                  {records.filter((r) => r.status_proyecto === 'Cerrado Ganado').length}
+                  {records.filter((r) => r.estado_proyecto === 'Cerrado Ganado').length}
                 </span>
               </button>
 

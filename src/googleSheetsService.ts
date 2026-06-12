@@ -271,6 +271,15 @@ export async function syncFromGoogleSheets(
           finalStatus = 'Propuesta';
         }
 
+        let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' = 'Warm';
+        if (finalStatus === 'Cerrado Ganado') {
+          finalStatusNivel = 'Win';
+        } else if (finalStatus === 'Negociación') {
+          finalStatusNivel = 'Hot';
+        } else {
+          finalStatusNivel = 'Cool';
+        }
+
         parsedRecords.push({
           id,
           informacion_general_folio: folio,
@@ -287,7 +296,8 @@ export async function syncFromGoogleSheets(
           total_iva_cotizacion: iva,
           total_general_cotizacion: tot,
           informacion_general_moneda: (getVal(monedaIdx).toUpperCase() === 'USD' ? 'USD' : 'MXN') as 'USD' | 'MXN',
-          status_proyecto: finalStatus,
+          estado_proyecto: finalStatus,
+          status_proyecto: finalStatusNivel,
           folio_orden_compra: detectedFolioOc || undefined,
           link_orden_compra: getVal(linkOcIdx) || undefined,
           notas_comerciales: getVal(notasIdx) || '',

@@ -387,16 +387,36 @@ export function mapRawCRMRecord(r: any): CRMRecord {
   const rawMoneda = String(getFlexibleValue(r, ['informacion_general_moneda', 'moneda', 'Moneda'], 'USD')).toUpperCase();
   const moneda = (rawMoneda === 'MXN' ? 'MXN' : 'USD') as 'USD' | 'MXN';
 
-  const rawStatus = String(getFlexibleValue(r, ['status_proyecto', 'status', 'Status', 'estado', 'Estado', 'status_proyecto'], 'Propuesta')).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const detectedFolioOc = String(getFlexibleValue(r, ['folio_orden_compra', 'folio_oc', 'folio oc', 'Folio OC', 'folio_orden_compra'], ''));
-  let finalStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
-  if (rawStatus.includes('ganado') || rawStatus.includes('cerrado') || detectedFolioOc !== '') {
-    finalStatus = 'Cerrado Ganado';
-  } else if (rawStatus.includes('negociacion') || rawStatus.includes('negotiation') || rawStatus.includes('proceso')) {
-    finalStatus = 'Negociación';
+  const rawEstado = String(getFlexibleValue(r, ['estado_proyecto', 'estado', 'Estado', 'estado_proyecto'], '')).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  let finalEstado: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
+  if (rawEstado.includes('ganado') || rawEstado.includes('cerrado')) {
+    finalEstado = 'Cerrado Ganado';
+  } else if (rawEstado.includes('negociacion') || rawEstado.includes('negotiation') || rawEstado.includes('proceso')) {
+    finalEstado = 'Negociación';
   } else {
-    finalStatus = 'Propuesta';
+    const altStatus = String(getFlexibleValue(r, ['status_proyecto', 'status', 'Status', 'status_proyecto'], '')).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (altStatus.includes('ganado') || altStatus.includes('cerrado')) {
+      finalEstado = 'Cerrado Ganado';
+    } else if (altStatus.includes('negociacion') || altStatus.includes('negotiation')) {
+      finalEstado = 'Negociación';
+    } else {
+      finalEstado = 'Propuesta';
+    }
   }
+
+  const rawStatusVal = String(getFlexibleValue(r, ['status_proyecto', 'prioridad_nivel', 'prioridad', 'status_proyecto'], 'Warm')).trim().toLowerCase();
+  let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' = 'Warm';
+  if (rawStatusVal.includes('win')) finalStatusNivel = 'Win';
+  else if (rawStatusVal.includes('hot')) finalStatusNivel = 'Hot';
+  else if (rawStatusVal.includes('cool')) finalStatusNivel = 'Cool';
+  else if (rawStatusVal.includes('warm')) finalStatusNivel = 'Warm';
+  else {
+    if (finalEstado === 'Cerrado Ganado') finalStatusNivel = 'Win';
+    else if (finalEstado === 'Negociación') finalStatusNivel = 'Hot';
+    else finalStatusNivel = 'Cool';
+  }
+
+  const detectedFolioOc = String(getFlexibleValue(r, ['folio_orden_compra', 'folio_oc', 'folio oc', 'Folio OC', 'folio_orden_compra'], ''));
 
   const rawInstalacion = getFlexibleValue(r, ['informacion_general_instalacion_incluida', 'instalacion_incluida', 'instalacion incluida', 'instalacion'], false);
   const instalacion = rawInstalacion === true || rawInstalacion === 'true' || rawInstalacion === 't' || rawInstalacion === 1 || rawInstalacion === '1';
@@ -417,7 +437,8 @@ export function mapRawCRMRecord(r: any): CRMRecord {
     total_iva_cotizacion: iva,
     total_general_cotizacion: general,
     informacion_general_moneda: moneda,
-    status_proyecto: finalStatus,
+    estado_proyecto: finalEstado,
+    status_proyecto: finalStatusNivel,
     folio_orden_compra: detectedFolioOc || undefined,
     link_orden_compra: getFlexibleValue(r, ['link_orden_compra', 'link_oc', 'link oc', 'Link OC', 'link_orden_compra']) || undefined,
     fecha_inicio_proyecto: getFlexibleValue(r, ['fecha_inicio_proyecto', 'fecha_inicio', 'fecha inicio', 'Fecha Inicio']) || undefined,
@@ -425,7 +446,7 @@ export function mapRawCRMRecord(r: any): CRMRecord {
     notas_comerciales: getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales']) || '',
     acciones_seguimiento: acciones_parsed,
     sustituye_folio_anterior: getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior']) || undefined,
-    prioridad_nivel: getFlexibleValue(r, ['prioridad_nivel', 'prioridad', 'Prioridad', 'prioridad_nivel']) || 'Warm'
+    prioridad_nivel: finalStatusNivel
   };
 }
 
@@ -642,6 +663,7 @@ export async function pushCRMRecordToSupabase(
       total_iva_cotizacion: iva,
       total_general_cotizacion: general,
       informacion_general_moneda: record.informacion_general_moneda,
+      estado_proyecto: record.estado_proyecto,
       status_proyecto: record.status_proyecto,
       folio_orden_compra: record.folio_orden_compra || null,
       link_orden_compra: record.link_orden_compra || null,
@@ -650,7 +672,7 @@ export async function pushCRMRecordToSupabase(
       notas_comerciales: record.notas_comerciales,
       acciones_seguimiento: record.acciones_seguimiento,
       sustituye_folio_anterior: record.sustituye_folio_anterior || null,
-      prioridad_nivel: record.prioridad_nivel || null
+      prioridad_nivel: record.status_proyecto || null
     };
 
     const shortPayload: any = {
@@ -670,6 +692,7 @@ export async function pushCRMRecordToSupabase(
       iva: iva,
       total: general,
       moneda: record.informacion_general_moneda,
+      estado_proyecto: record.estado_proyecto,
       status: record.status_proyecto,
       folio_oc: record.folio_orden_compra || null,
       link_oc: record.link_orden_compra || null,
@@ -678,7 +701,7 @@ export async function pushCRMRecordToSupabase(
       notas: record.notas_comerciales,
       acciones: record.acciones_seguimiento,
       sustituye: record.sustituye_folio_anterior || null,
-      prioridad: record.prioridad_nivel || null
+      prioridad: record.status_proyecto || null
     };
 
     const payload: any = { id: validUUID };

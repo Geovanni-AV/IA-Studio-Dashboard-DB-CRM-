@@ -31,6 +31,43 @@ export default function SyncSettingsSection({
   onSyncComplete,
   onShowAudit
 }: SyncSettingsSectionProps) {
+  // Check if current user is the official infrastructure administrator (geovanni@verse-technology.com)
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('verse_google_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed?.email || '';
+      }
+    } catch (e) {}
+    return '';
+  });
+
+  useEffect(() => {
+    const checkEmail = () => {
+      try {
+        const saved = localStorage.getItem('verse_google_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed?.email !== currentUserEmail) {
+            setCurrentUserEmail(parsed?.email || '');
+          }
+        } else if (currentUserEmail) {
+          setCurrentUserEmail('');
+        }
+      } catch (e) {}
+    };
+
+    const interval = setInterval(checkEmail, 1000);
+    window.addEventListener('storage', checkEmail);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', checkEmail);
+    };
+  }, [currentUserEmail]);
+
+  const isInfraAdmin = currentUserEmail.toLowerCase() === 'geovanni@verse-technology.com';
+
   // Config fields
   const [sheetUrl, setSheetUrl] = useState(() => {
     return localStorage.getItem('verse_sheet_url') || 'https://docs.google.com/spreadsheets/d/1O0K6_E-zB8W8GzOq34AUnm5S-qY30hZ2p_T87152B3A/edit';
@@ -43,16 +80,22 @@ export default function SyncSettingsSection({
   });
 
   useEffect(() => {
-    localStorage.setItem('verse_sheet_url', sheetUrl);
-  }, [sheetUrl]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_sheet_url', sheetUrl);
+    }
+  }, [sheetUrl, isInfraAdmin]);
 
   useEffect(() => {
-    localStorage.setItem('verse_sheet_api_key', apiKey);
-  }, [apiKey]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_sheet_api_key', apiKey);
+    }
+  }, [apiKey, isInfraAdmin]);
 
   useEffect(() => {
-    localStorage.setItem('verse_sheet_token', token);
-  }, [token]);
+    if (isInfraAdmin) {
+      localStorage.setItem('verse_sheet_token', token);
+    }
+  }, [token, isInfraAdmin]);
 
   // OAuth Client Information matching the provided credentials
   const clientId = '769103708552-r9ljosbra9hp8bk4l5sgm8h3j4mt77ii.apps.googleusercontent.com';
@@ -66,6 +109,11 @@ export default function SyncSettingsSection({
   const [isSyncing, setIsSyncing] = useState(false);
 
   const handleSyncWithToken = async (overrideToken?: string) => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede ejecutar la sincronización activa con Google Sheets.");
+      return;
+    }
+
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: El perfil "${role}" no tiene privilegios para iniciar sincronizaciones bilaterales.`);
       return;
@@ -97,6 +145,14 @@ export default function SyncSettingsSection({
       if (event.origin !== window.location.origin) return;
 
       if (event.data?.type === 'GOOGLE_SHEETS_TOKEN' && event.data?.token) {
+        if (!isInfraAdmin) {
+          setLogs((prev) => [...prev, {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'error',
+            message: 'Intento de vinculación web bloqueado: Token recibido pero el usuario activo no es el administrador de infraestructura.'
+          }]);
+          return;
+        }
         setToken(event.data.token);
         setLogs((prev) => [...prev, {
           timestamp: new Date().toLocaleTimeString(),
@@ -110,9 +166,14 @@ export default function SyncSettingsSection({
 
     window.addEventListener('message', handleOAuthMessage);
     return () => window.removeEventListener('message', handleOAuthMessage);
-  }, [sheetUrl, apiKey, role, token]);
+  }, [sheetUrl, apiKey, role, token, isInfraAdmin]);
 
   const handleOAuthLogin = () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede autorizar nuevas credenciales de Google OAuth.");
+      return;
+    }
+
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: El perfil "${role}" no tiene privilegios para realizar conexiones de datos.`);
       return;
@@ -148,10 +209,19 @@ export default function SyncSettingsSection({
   };
 
   const handleSyncNow = async () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede ejecutar la sincronización activa con Google Sheets.");
+      return;
+    }
     await handleSyncWithToken();
   };
 
   const handleReset = () => {
+    if (!isInfraAdmin) {
+      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede realizar el restablecimiento administrativo de prueba local.");
+      return;
+    }
+
     if (role !== 'Admin') {
       alert(`🔒 Acción Restringida: Solo el rol de Administrador ("Admin") está facultado para restaurar la persistencia de prueba local.`);
       return;
@@ -192,6 +262,29 @@ export default function SyncSettingsSection({
         </p>
       </div>
 
+      {/* BANNERS DE CONTROL EXCLUSIVO DE INFRAESTRUCTURA */}
+      {!isInfraAdmin ? (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-4 flex items-start gap-3 shadow-sm">
+          <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5 animate-bounce" />
+          <div className="text-xs space-y-1">
+            <p className="font-bold">Modo de Visualización Autorizado (Solo Lectura)</p>
+            <p className="leading-relaxed font-medium">
+              Estás visualizando el panel de control de Google Sheets. Solo el Ingeniero Titular administrador de infraestructura (<strong className="font-bold text-slate-900">geovanni@verse-technology.com</strong>) tiene facultades de escritura, cambio de credenciales, cambio de logos y sincronización activa para esta ventana.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-950 rounded-lg p-4 flex items-start gap-3 shadow-sm">
+          <ShieldCheck className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <p className="font-bold">Sesión Titular de Infraestructura Detectada</p>
+            <p className="leading-relaxed font-medium">
+              Bienvenido, <strong className="font-bold text-emerald-900">{currentUserEmail}</strong>. Tienes privilegios administrativos completos para reconfigurar credenciales, sincronizar bases de datos comerciales y reestablecer cachés.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-12 gap-5">
         {/* Connection Setup card */}
         <div className="col-span-12 lg:col-span-6 space-y-4">
@@ -202,7 +295,7 @@ export default function SyncSettingsSection({
             </h3>
 
             {role === 'Solo Lectura' && (
-              <div className="bg-amber-50 text-amber-800 border border-amber-100 p-2.5 rounded text-xs flex items-center gap-1.5">
+              <div className="bg-amber-50 text-amber-800 border border-amber-100 p-2.5 rounded text-xs flex items-center gap-1.5 animate-pulse">
                 <Lock className="w-4 h-4 text-amber-700" />
                 <span>Bloqueo del Rol Activo: Tienes privilegios reducidos. No puedes detonar la sincronización.</span>
               </div>
@@ -230,9 +323,9 @@ export default function SyncSettingsSection({
               <button
                 type="button"
                 onClick={handleOAuthLogin}
-                disabled={role === 'Solo Lectura'}
+                disabled={role === 'Solo Lectura' || !isInfraAdmin}
                 className={`w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-3 rounded-lg border border-slate-950 transition-all flex justify-center items-center gap-2.5 text-xs shadow-3xs ${
-                  role === 'Solo Lectura' ? 'opacity-50 cursor-not-allowed bg-slate-400 border-none' : ''
+                  role === 'Solo Lectura' || !isInfraAdmin ? 'opacity-50 cursor-not-allowed bg-slate-400 border-none' : ''
                 }`}
               >
                 <Chrome className="w-4.5 h-4.5 text-blue-400 animate-pulse" />
@@ -252,8 +345,15 @@ export default function SyncSettingsSection({
                   type="url"
                   placeholder="https://docs.google.com/spreadsheets/d/S_ID/edit"
                   value={sheetUrl}
-                  onChange={(e) => setSheetUrl(e.target.value)}
-                  className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-800 outline-none focus:ring-1 focus:ring-blue-500"
+                  disabled={!isInfraAdmin}
+                  onChange={(e) => {
+                    if (!isInfraAdmin) {
+                      alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización.");
+                      return;
+                    }
+                    setSheetUrl(e.target.value);
+                  }}
+                  className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-800 outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -266,8 +366,15 @@ export default function SyncSettingsSection({
                     type={token ? "password" : "text"}
                     placeholder="Generado automáticamente al autorizar arriba..."
                     value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-850 outline-none font-mono"
+                    disabled={!isInfraAdmin}
+                    onChange={(e) => {
+                      if (!isInfraAdmin) {
+                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización.");
+                        return;
+                      }
+                      setToken(e.target.value);
+                    }}
+                    className="text-xs w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-slate-855 outline-none font-mono disabled:opacity-75 disabled:cursor-not-allowed"
                   />
                   {token && (
                     <span className="absolute right-3 top-2.5 text-[10px] uppercase font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded flex items-center gap-0.5 animate-bounce">
@@ -285,17 +392,24 @@ export default function SyncSettingsSection({
                   type="password"
                   placeholder="AIzaSyA..."
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="text-xs w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-slate-800 outline-none font-mono"
+                  disabled={!isInfraAdmin}
+                  onChange={(e) => {
+                    if (!isInfraAdmin) {
+                      alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización.");
+                      return;
+                    }
+                    setApiKey(e.target.value);
+                  }}
+                  className="text-xs w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-slate-800 outline-none font-mono disabled:opacity-75 disabled:cursor-not-allowed"
                 />
               </div>
 
               <button
                 type="button"
                 onClick={handleSyncNow}
-                disabled={isSyncing || role === 'Solo Lectura'}
+                disabled={isSyncing || role === 'Solo Lectura' || !isInfraAdmin}
                 className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-all flex justify-center items-center gap-1.5 shadow-3xs ${
-                  isSyncing || role === 'Solo Lectura' ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''
+                  isSyncing || role === 'Solo Lectura' || !isInfraAdmin ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''
                 }`}
               >
                 {isSyncing ? (
@@ -320,14 +434,14 @@ export default function SyncSettingsSection({
 
             <button
               onClick={handleReset}
-              disabled={role !== 'Admin'}
+              disabled={role !== 'Admin' || !isInfraAdmin}
               className={`w-full font-bold text-xs py-2.5 rounded transition-colors flex justify-center items-center gap-1.5 ${
-                role === 'Admin'
+                role === 'Admin' && isInfraAdmin
                   ? 'bg-red-600 text-white hover:bg-red-700'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
             >
-              {role !== 'Admin' && <Lock className="w-3.5 h-3.5" />}
+              {(role !== 'Admin' || !isInfraAdmin) && <Lock className="w-3.5 h-3.5" />}
               RESTABLECER VALORES ESTÁNDAR
             </button>
           </div>
@@ -386,7 +500,12 @@ export default function SyncSettingsSection({
                   <input
                     type="file"
                     accept=".svg,.png,.jpg,.jpeg"
+                    disabled={!isInfraAdmin}
                     onChange={(e) => {
+                      if (!isInfraAdmin) {
+                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede cambiar el logo oficial.");
+                        return;
+                      }
                       const file = e.target.files?.[0];
                       if (file) {
                         const reader = new FileReader();
@@ -406,7 +525,7 @@ export default function SyncSettingsSection({
                       file:rounded-md file:border-0
                       file:text-xs file:font-semibold
                       file:bg-blue-50 file:text-blue-700
-                      hover:file:bg-blue-100 cursor-pointer"
+                      hover:file:bg-blue-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -421,9 +540,14 @@ export default function SyncSettingsSection({
                     type="text"
                     id="logo_url_input"
                     placeholder="https://ejemplo.com/logo-oficial.svg"
-                    className="text-xs flex-1 bg-slate-50 border border-slate-200 p-2 rounded-md text-slate-800 outline-none focus:ring-1 focus:ring-blue-500"
+                    disabled={!isInfraAdmin}
+                    className="text-xs flex-1 bg-slate-50 border border-slate-200 p-2 rounded-md text-slate-800 outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
+                        if (!isInfraAdmin) {
+                          alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede cambiar el logo oficial.");
+                          return;
+                        }
                         const target = e.currentTarget;
                         if (target.value.trim()) {
                           localStorage.setItem('verse_custom_logo', target.value.trim());
@@ -436,6 +560,10 @@ export default function SyncSettingsSection({
                   />
                   <button
                     onClick={() => {
+                      if (!isInfraAdmin) {
+                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede cambiar el logo oficial.");
+                        return;
+                      }
                       const input = document.getElementById('logo_url_input') as HTMLInputElement | null;
                       if (input && input.value.trim()) {
                         localStorage.setItem('verse_custom_logo', input.value.trim());
@@ -444,7 +572,8 @@ export default function SyncSettingsSection({
                         window.location.reload();
                       }
                     }}
-                    className="px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-md"
+                    disabled={!isInfraAdmin}
+                    className="px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-md disabled:bg-slate-400 disabled:cursor-not-allowed"
                   >
                     Vincular
                   </button>
@@ -454,13 +583,18 @@ export default function SyncSettingsSection({
               {localStorage.getItem('verse_custom_logo') && (
                 <button
                   onClick={() => {
+                    if (!isInfraAdmin) {
+                      alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede cambiar el logo oficial.");
+                      return;
+                    }
                     if (window.confirm('¿Desea restablecer el logo por defecto oficial de Verse?')) {
                       localStorage.removeItem('verse_custom_logo');
                       window.dispatchEvent(new Event('storage'));
                       window.location.reload();
                     }
                   }}
-                  className="w-full text-center text-red-500 hover:text-red-600 font-bold text-xs py-1 mt-1 block"
+                  className="w-full text-center text-red-500 hover:text-red-600 font-bold text-xs py-1 mt-1 block disabled:text-slate-400"
+                  disabled={!isInfraAdmin}
                 >
                   Restablecer logo oficial por defecto
                 </button>

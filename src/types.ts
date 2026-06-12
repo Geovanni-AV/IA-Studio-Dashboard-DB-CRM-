@@ -24,7 +24,8 @@ export interface CRMRecord {
   total_iva_cotizacion: number; // 16% of Subtotal
   total_general_cotizacion: number; // Subtotal + IVA
   informacion_general_moneda: 'USD' | 'MXN'; // Contract default currency
-  status_proyecto: 'Propuesta' | 'Negociación' | 'Cerrado Ganado';
+  estado_proyecto: 'Propuesta' | 'Negociación' | 'Cerrado Ganado'; // Column 6
+  status_proyecto: 'Win' | 'Hot' | 'Warm' | 'Cool'; // Column 7
   
   // Purchase Order Details (for Cerrado Ganado)
   folio_orden_compra?: string;

@@ -25,10 +25,10 @@ export default function PurchaseOrdersSection({
   const [instalacionIncluida, setInstalacionIncluida] = useState(true);
 
   // Filter won contracts (Cerrado Ganado)
-  const wonContracts = records.filter((r) => r.status_proyecto === 'Cerrado Ganado');
+  const wonContracts = records.filter((r) => r.estado_proyecto === 'Cerrado Ganado');
   
   // Filter candidates (Propuesta / Negociación)
-  const pendingContracts = records.filter((r) => r.status_proyecto !== 'Cerrado Ganado');
+  const pendingContracts = records.filter((r) => r.estado_proyecto !== 'Cerrado Ganado');
 
   // Map PO formalization
   const handleFormalize = (e: React.FormEvent) => {
@@ -51,7 +51,8 @@ export default function PurchaseOrdersSection({
 
     const updatedRecord: CRMRecord = {
       ...baseProject,
-      status_proyecto: 'Cerrado Ganado',
+      estado_proyecto: 'Cerrado Ganado',
+      status_proyecto: 'Win',
       folio_orden_compra: folioOC,
       link_orden_compra: linkOC || 'https://drive.google.com/open?id=standard_po_placeholder',
       fecha_inicio_proyecto: fechaInicio || new Date().toISOString().split('T')[0],
