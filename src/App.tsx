@@ -71,6 +71,46 @@ export default function App() {
   const [pulseNotification, setPulseNotification] = useState(true);
 
   // States for loaders and feedback notifications
+  const [googleUser, setGoogleUser] = useState<{ name: string; email: string; picture: string } | null>(() => {
+    const saved = localStorage.getItem('verse_google_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [googleToken, setGoogleToken] = useState<string>(() => {
+    return localStorage.getItem('verse_sheet_token') || '';
+  });
+
+  const fetchGoogleProfile = async (token: string) => {
+    try {
+      const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const profile = {
+          name: data.name || 'Usuario Google',
+          email: data.email || '',
+          picture: data.picture || ''
+        };
+        setGoogleUser(profile);
+        localStorage.setItem('verse_google_user', JSON.stringify(profile));
+        showToast(`¡Conexión autorizada! Bienvenido, ${profile.name}`, 'success');
+      } else {
+        console.warn('Token inválido o expirado en el API de Google.');
+      }
+    } catch (e) {
+      console.error('Error fetching Google profile:', e);
+    }
+  };
+
+  const handleDisconnectGoogle = () => {
+    setGoogleUser(null);
+    setGoogleToken('');
+    localStorage.removeItem('verse_sheet_token');
+    localStorage.removeItem('verse_google_user');
+    showToast('Conexión con Google desvinculada.', 'info');
+  };
+
   const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
   const [supabaseStatus, setSupabaseStatus] = useState<'LOADING' | 'CONNECTED' | 'ERROR' | 'OFFLINE'>('OFFLINE');
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'info' | null }>({
@@ -193,38 +233,8 @@ export default function App() {
 
       // Run on startup
       await pullData(false);
-
-      // Trigger automatic pulls on window focus (helps import immediately when returning from Supabase tab)
-      const handleFocus = () => {
-        addSupabaseLogToStorage('Ventana enfocada: Activando actualización en tiempo real desde Supabase...', 'info');
-        pullData(true);
-      };
-
-      window.addEventListener('focus', handleFocus);
-
-      // Setup continuous background polling (every 15 seconds) to catch RLS resolution or external updates
-      const intervalId = setInterval(() => {
-        pullData(true);
-      }, 15000);
-
-      return () => {
-        window.removeEventListener('focus', handleFocus);
-        clearInterval(intervalId);
-      };
     };
-
-    let cleanupFn: (() => void) | undefined;
-    fetchFromSupabaseOnStart().then(cleanup => {
-      if (typeof cleanup === 'function') {
-        cleanupFn = cleanup;
-      }
-    });
-
-    return () => {
-      if (cleanupFn) {
-        cleanupFn();
-      }
-    };
+    fetchFromSupabaseOnStart();
   }, []);
 
   // Capture OAuth Access Token redirect inside Google's auth popup window
@@ -242,6 +252,30 @@ export default function App() {
       }
     }
   }, []);
+
+  // Listen to Google login oauth tokens from popup and fetch profile info
+  useEffect(() => {
+    const handleOAuthMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data?.type === 'GOOGLE_SHEETS_TOKEN' && event.data?.token) {
+        const token = event.data.token;
+        setGoogleToken(token);
+        localStorage.setItem('verse_sheet_token', token);
+        fetchGoogleProfile(token);
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, []);
+
+  // Dynamic fetch Google profile upon startup if token is active
+  useEffect(() => {
+    if (googleToken && !googleUser) {
+      fetchGoogleProfile(googleToken);
+    }
+  }, [googleToken, googleUser]);
 
   // Save states automatically
   useEffect(() => {
@@ -371,9 +405,23 @@ export default function App() {
       {/* BARRA DE SEGURIDAD SUPERIOR PREMIUM SLATE-900 */}
       <header className="h-16 bg-slate-900 text-white flex items-center justify-between px-6 shrink-0 z-40 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center font-bold text-lg text-white shadow-md">
-            V
-          </div>
+          {localStorage.getItem('verse_custom_logo') ? (
+            <div className="w-8 h-8 flex items-center justify-center p-0.5 bg-slate-800 rounded border border-slate-700 shadow-inner">
+              <img 
+                src={localStorage.getItem('verse_custom_logo') || ''} 
+                alt="Logo Oficial" 
+                className="max-w-full max-h-full object-contain"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          ) : (
+            <div className="w-8 h-8 flex items-center justify-center select-none" title="Verse Technology Logo Oficial">
+              <svg viewBox="0 0 100 100" className="w-8 h-8 rounded-md shadow-md overflow-hidden" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100" height="100" fill="#2f67ff" />
+                <text x="52" y="52" fill="white" fontSize="68" fontWeight="900" fontFamily='"Outfit", "Inter", "Space Grotesk", sans-serif' textAnchor="middle" dominantBaseline="central">T</text>
+              </svg>
+            </div>
+          )}
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-white leading-tight">
               Verse <span className="font-light text-slate-400 text-xs italic ml-1">CRM Inteligente</span>
@@ -390,26 +438,26 @@ export default function App() {
             <button
               onClick={() => setRole('Admin')}
               className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${
-                role === 'Admin' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+                role === 'Admin' ? 'bg-[#2f67ff] text-white shadow-xs' : 'text-slate-400 hover:text-white'
               }`}
             >
-              Carlos (Admin)
+              Administrador (Admin)
             </button>
             <button
               onClick={() => setRole('Vendedor')}
               className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${
-                role === 'Vendedor' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+                role === 'Vendedor' ? 'bg-[#2f67ff] text-white shadow-xs' : 'text-slate-400 hover:text-white'
               }`}
             >
-              Laura (Ventas)
+              Vendedor (Comercial)
             </button>
             <button
               onClick={() => setRole('Solo Lectura')}
               className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${
-                role === 'Solo Lectura' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+                role === 'Solo Lectura' ? 'bg-[#2f67ff] text-white shadow-xs' : 'text-slate-400 hover:text-white'
               }`}
             >
-              🔒 Auditor
+              🔒 Auditor (Lectura)
             </button>
           </div>
 
@@ -420,23 +468,76 @@ export default function App() {
               onChange={(e) => setRole(e.target.value as UserRole)}
               className="bg-transparent border-none text-white outline-none text-xs"
             >
-              <option value="Admin" className="bg-slate-900 text-white">Carlos (Admin)</option>
-              <option value="Vendedor" className="bg-slate-900 text-white">Laura (Ventas)</option>
-              <option value="Solo Lectura" className="bg-slate-900 text-white">🔒 Auditor</option>
+              <option value="Admin" className="bg-slate-900 text-white">Administrador (Admin)</option>
+              <option value="Vendedor" className="bg-slate-900 text-white font-sans">Vendedor (Comercial)</option>
+              <option value="Solo Lectura" className="bg-slate-900 text-white">🔒 Auditor (Lectura)</option>
             </select>
           </div>
 
-          <div className="h-8 w-px bg-slate-700/60"></div>
+          <div className="h-8 w-px bg-slate-700/60 font-sans"></div>
 
-          {/* USER INFO & PROFILE AVATAR */}
-          <div className="flex items-center gap-3">
-            <div className="text-right hidden sm:block">
-              <p className="text-xs font-semibold text-slate-100">Carlos González</p>
-              <p className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">Dirección General</p>
-            </div>
-            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-200">
-              CG
-            </div>
+          {/* USER INFO & PROFILE AVATAR DESDE GOOGLE OAUTH */}
+          <div 
+            onClick={() => {
+              if (googleUser) {
+                if (window.confirm("¿Desea desvincular comercialmente su cuenta Google?")) {
+                  handleDisconnectGoogle();
+                }
+              } else {
+                setActiveTab('SyncSettings');
+                const clientId = '769103708552-r9ljosbra9hp8bk4l5sgm8h3j4mt77ii.apps.googleusercontent.com';
+                const redirectUri = window.location.origin;
+                const scope = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
+                const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=sheets_sync`;
+                
+                const width = 600;
+                const height = 650;
+                const left = window.screen.width / 2 - width / 2;
+                const top = window.screen.height / 2 - height / 2;
+                
+                const popup = window.open(
+                  oauthUrl,
+                  'google_oauth_popup',
+                  `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
+                );
+                if (!popup) {
+                  showToast('Ventana emergente bloqueada por el navegador. Habilite popups.', 'error');
+                }
+              }
+            }}
+            className="flex items-center gap-3 cursor-pointer hover:bg-slate-800 p-1.5 px-2.5 rounded-lg border border-transparent hover:border-slate-700 transition-all select-none"
+            title={googleUser ? "Google Vinculado. Clic para Cerrar Sesión" : "Google sin vincular. Clic para conectar"}
+          >
+            {googleUser ? (
+              <>
+                <div className="text-right hidden sm:block">
+                  <p className="text-xs font-semibold text-slate-100">{googleUser.name}</p>
+                  <p className="text-[10px] text-green-400 font-bold uppercase tracking-widest font-mono">Google Conectado</p>
+                </div>
+                {googleUser.picture ? (
+                  <img 
+                    referrerPolicy="no-referrer"
+                    src={googleUser.picture} 
+                    alt={googleUser.name} 
+                    className="w-8 h-8 rounded-full border border-green-500 object-cover shadow-sm"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-green-700 border border-green-500 flex items-center justify-center text-xs font-bold text-white shadow-sm">
+                    {googleUser.name.charAt(0)}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-right hidden sm:block">
+                  <p className="text-xs font-semibold text-slate-400 hover:text-white text-sans">Google sin vincular</p>
+                  <p className="text-[10px] text-amber-500 font-bold uppercase tracking-widest font-mono font-sans animate-pulse">Clic para conectar</p>
+                </div>
+                <div className="w-8 h-8 rounded-full bg-slate-800 border border-dashed border-slate-600 flex items-center justify-center text-xs font-black text-slate-400">
+                  G
+                </div>
+              </>
+            )}
           </div>
 
           {/* BELL NOTIFICATION */}

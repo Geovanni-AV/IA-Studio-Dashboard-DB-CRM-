@@ -19,7 +19,16 @@ export default function FollowupsSection({
   
   // Followup form fields
   const [tipo, setTipo] = useState<'Llamada Telefónica' | 'Correo Electrónico' | 'Revisión Técnica' | 'Visita a Sitio' | 'Minuta de Junta'>('Llamada Telefónica');
-  const [creador, setCreador] = useState(role === 'Admin' ? 'Carlos (Director)' : 'Laura (Ventas)');
+  const [creador, setCreador] = useState(() => {
+    const savedUser = localStorage.getItem('verse_google_user');
+    if (savedUser) {
+      try {
+        const parsed = JSON.parse(savedUser);
+        if (parsed?.name) return parsed.name;
+      } catch (e) {}
+    }
+    return role === 'Admin' ? 'Administrador' : 'Vendedor';
+  });
   const [notas, setNotas] = useState('');
 
   const activeRecord = records.find((r) => r.id === selectedRecordId) || records[0];

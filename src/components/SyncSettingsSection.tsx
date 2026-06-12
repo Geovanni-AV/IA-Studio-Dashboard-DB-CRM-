@@ -119,8 +119,8 @@ export default function SyncSettingsSection({
     }
 
     const redirectUri = window.location.origin;
-    // Request Google Sheets and Drive metadata scopes
-    const scope = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly';
+    // Request Google Sheets, Drive, and User Profile metadata scopes for identity retrieval
+    const scope = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
     
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=sheets_sync`;
     
@@ -330,6 +330,142 @@ export default function SyncSettingsSection({
               {role !== 'Admin' && <Lock className="w-3.5 h-3.5" />}
               RESTABLECER VALORES ESTÁNDAR
             </button>
+          </div>
+
+          {/* Módulo de Auditoría de Identidad: Gestión del Logo Oficial de Verse Technology */}
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm space-y-4">
+            <h3 className="font-title-sm text-base font-semibold text-[#0b1c30] flex items-center gap-2 border-b border-slate-100 pb-2">
+              <Sparkles className="text-blue-600 w-4.5 h-4.5 animate-pulse" />
+              Identidad Corporativa y Logo Oficial
+            </h3>
+            
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Auditoría del logo: Administra el identificador visual de <strong>Verse Technology</strong>. El logo se sincronizará de forma automática y unificada en la barra superior de seguridad y en todos los formularios interactivos de exportación y cotizaciones.
+            </p>
+
+            <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-100 text-xs space-y-2">
+              <p className="font-bold text-slate-700 text-[11px] uppercase tracking-wider block">Formatos recomendados para compartir:</p>
+              <ul className="list-disc list-inside space-y-1 text-slate-600 text-[11.5px] pl-1 font-sans">
+                <li><strong className="text-slate-900 font-semibold">SVG Vectorial (.svg) [Altamente recomendado]:</strong> Ideal para un escalado nítido basado en curvas matemáticas en pantallas Retina.</li>
+                <li><strong className="text-slate-900 font-semibold">PNG con transparencia (.png):</strong> Resolución sugerida de min. 128x128 píxeles con fondo transparente.</li>
+                <li><strong className="text-slate-900 font-semibold">JPG de alta densidad (.jpg/.jpeg):</strong> Imagen limpia y centrada con relación de aspecto cuadrada.</li>
+              </ul>
+            </div>
+
+            {/* Logo Customizer controls */}
+            <div className="space-y-3.5">
+              <div className="flex items-center gap-4 p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="w-12 h-12 flex-shrink-0 bg-slate-800 rounded flex items-center justify-center p-2 border border-slate-700">
+                  {localStorage.getItem('verse_custom_logo') ? (
+                    <img 
+                      src={localStorage.getItem('verse_custom_logo') || ''} 
+                      alt="Logo Oficial Preview" 
+                      className="max-w-full max-h-full object-contain"
+                    />
+                  ) : (
+                    <svg viewBox="0 0 100 100" className="w-10 h-10 select-none rounded shadow-sm overflow-hidden" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="100" height="100" fill="#2f67ff" />
+                      <text x="52" y="52" fill="white" fontSize="68" fontWeight="800" fontFamily='"Outfit", "Inter", "Space Grotesk", sans-serif' textAnchor="middle" dominantBaseline="central">T</text>
+                    </svg>
+                  )}
+                </div>
+                <div className="flex-1 text-left">
+                  <span className="text-[10px] text-green-400 font-mono font-bold tracking-widest uppercase block mb-0.5">Vista previa en producción</span>
+                  <span className="text-xs text-slate-200 font-semibold leading-none">
+                    {localStorage.getItem('verse_custom_logo') ? 'Logo oficial personalizado de Verse' : 'Logo Vectorial Oficial (Por Defecto)'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Upload controls */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider font-label-caps">
+                  Cargar nuevo logo corporativo (Archivo local o Drag-and-drop)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".svg,.png,.jpg,.jpeg"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          const base64String = reader.result as string;
+                          localStorage.setItem('verse_custom_logo', base64String);
+                          window.dispatchEvent(new Event('storage'));
+                          // Force local render update
+                          alert('¡Logo oficial cargado e incorporado con éxito de forma unificada!');
+                          window.location.reload();
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                    className="block w-full text-xs text-slate-500
+                      file:mr-3 file:py-1.5 file:px-3
+                      file:rounded-md file:border-0
+                      file:text-xs file:font-semibold
+                      file:bg-blue-50 file:text-blue-700
+                      hover:file:bg-blue-100 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* URL Customizer controls */}
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider font-label-caps">
+                  O vincular vía URL de imagen pública
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    id="logo_url_input"
+                    placeholder="https://ejemplo.com/logo-oficial.svg"
+                    className="text-xs flex-1 bg-slate-50 border border-slate-200 p-2 rounded-md text-slate-800 outline-none focus:ring-1 focus:ring-blue-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const target = e.currentTarget;
+                        if (target.value.trim()) {
+                          localStorage.setItem('verse_custom_logo', target.value.trim());
+                          window.dispatchEvent(new Event('storage'));
+                          alert('¡Logo cargado mediante URL exitosamente!');
+                          window.location.reload();
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.getElementById('logo_url_input') as HTMLInputElement | null;
+                      if (input && input.value.trim()) {
+                        localStorage.setItem('verse_custom_logo', input.value.trim());
+                        window.dispatchEvent(new Event('storage'));
+                        alert('¡Logo cargado mediante URL exitosamente!');
+                        window.location.reload();
+                      }
+                    }}
+                    className="px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-md"
+                  >
+                    Vincular
+                  </button>
+                </div>
+              </div>
+
+              {localStorage.getItem('verse_custom_logo') && (
+                <button
+                  onClick={() => {
+                    if (window.confirm('¿Desea restablecer el logo por defecto oficial de Verse?')) {
+                      localStorage.removeItem('verse_custom_logo');
+                      window.dispatchEvent(new Event('storage'));
+                      window.location.reload();
+                    }
+                  }}
+                  className="w-full text-center text-red-500 hover:text-red-600 font-bold text-xs py-1 mt-1 block"
+                >
+                  Restablecer logo oficial por defecto
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

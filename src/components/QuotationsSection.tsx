@@ -166,11 +166,35 @@ export default function QuotationsSection({ records, exchangeRate }: QuotationsS
               </div>
 
               <div className="relative z-10 space-y-3.5">
-                <div className="pb-2 border-b border-white/10 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-bold uppercase tracking-wider font-label-caps text-emerald-400">
-                    Ficha de Cómputo Fiscal (SAT Ley Comercial)
-                  </span>
+                <div className="pb-2 border-b border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold uppercase tracking-wider font-label-caps text-emerald-400">
+                      Ficha de Cómputo Fiscal (SAT Ley Comercial)
+                    </span>
+                  </div>
+                  
+                  {/* LOGO CORPORATIVO UNIFICADO */}
+                  <div className="flex items-center gap-1.5 opacity-90">
+                    <span className="text-[9px] font-mono font-bold tracking-widest text-slate-450 uppercase hidden sm:inline">Verse Tech</span>
+                    {localStorage.getItem('verse_custom_logo') ? (
+                      <div className="w-6 h-6 flex items-center justify-center p-0.5 bg-slate-900 rounded border border-slate-700/60 shadow-inner">
+                        <img 
+                          src={localStorage.getItem('verse_custom_logo') || ''} 
+                          alt="Logo Oficial" 
+                          className="max-w-full max-h-full object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-6 h-6 flex items-center justify-center select-none" title="Verse technology Logo Oficial">
+                        <svg viewBox="0 0 100 100" className="w-5 h-5 rounded shadow-sm overflow-hidden" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="100" height="100" fill="#2f67ff" />
+                          <text x="52" y="52" fill="white" fontSize="68" fontWeight="800" fontFamily='"Outfit", "Inter", "Space Grotesk", sans-serif' textAnchor="middle" dominantBaseline="central">T</text>
+                        </svg>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-2 text-xs">
