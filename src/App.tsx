@@ -24,6 +24,7 @@ import FollowupsSection from './components/FollowupsSection';
 import AuditSection from './components/AuditSection';
 import SyncSettingsSection from './components/SyncSettingsSection';
 import SignInScreen from './components/ui/travel-connect-signin-1';
+import UserProfileSection from './components/UserProfileSection';
 
 // Icons
 import {
@@ -41,7 +42,8 @@ import {
   HelpCircle,
   Globe,
   Plus,
-  Database
+  Database,
+  User
 } from 'lucide-react';
 
 export default function App() {
@@ -128,6 +130,7 @@ export default function App() {
     setGoogleUser(null);
     setGoogleToken('');
     setIsAuthenticated(false);
+    setActiveTab('Dashboard');
     localStorage.removeItem('verse_sheet_token');
     localStorage.removeItem('verse_google_user');
     localStorage.removeItem('verse_is_logged_in');
@@ -423,7 +426,32 @@ export default function App() {
     setAuditLogs([initialLog]);
   };
 
-  if (!isAuthenticated) {
+  // Intercept Google Auth popup callback before routing/bootstrapping to prevent recursive app loading
+  if (typeof window !== 'undefined' && window.opener && window.location.hash.includes('access_token')) {
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const token = params.get('access_token');
+    const state = params.get('state');
+    if (token && state === 'sheets_sync') {
+      try {
+        window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token }, window.location.origin);
+      } catch (err) {
+        console.error("Error sending token to opener:", err);
+      }
+      setTimeout(() => {
+        window.close();
+      }, 150);
+    }
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="w-10 h-10 border-2 border-t-transparent border-blue-500 rounded-full animate-spin mb-4"></div>
+        <h2 className="text-base font-bold mb-1">Vinculando Cuenta Google...</h2>
+        <p className="text-xs text-slate-400">Esta ventana emergente de autorización se cerrará automáticamente.</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !googleUser) {
     return <SignInScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
@@ -505,35 +533,9 @@ export default function App() {
 
           {/* USER INFO & PROFILE AVATAR DESDE GOOGLE OAUTH */}
           <div 
-            onClick={() => {
-              if (googleUser) {
-                if (window.confirm("¿Desea desvincular comercialmente su cuenta Google?")) {
-                  handleDisconnectGoogle();
-                }
-              } else {
-                setActiveTab('SyncSettings');
-                const clientId = '769103708552-r9ljosbra9hp8bk4l5sgm8h3j4mt77ii.apps.googleusercontent.com';
-                const redirectUri = window.location.origin;
-                const scope = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
-                const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=sheets_sync`;
-                
-                const width = 600;
-                const height = 650;
-                const left = window.screen.width / 2 - width / 2;
-                const top = window.screen.height / 2 - height / 2;
-                
-                const popup = window.open(
-                  oauthUrl,
-                  'google_oauth_popup',
-                  `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
-                );
-                if (!popup) {
-                  showToast('Ventana emergente bloqueada por el navegador. Habilite popups.', 'error');
-                }
-              }
-            }}
+            onClick={() => setActiveTab('UserProfile')}
             className="flex items-center gap-3 cursor-pointer hover:bg-slate-800 p-1.5 px-2.5 rounded-lg border border-transparent hover:border-slate-700 transition-all select-none"
-            title={googleUser ? "Google Vinculado. Clic para Cerrar Sesión" : "Google sin vincular. Clic para conectar"}
+            title="Ver Perfil de Inicio & Configuración"
           >
             {googleUser ? (
               <>
@@ -557,10 +559,10 @@ export default function App() {
             ) : (
               <>
                 <div className="text-right hidden sm:block">
-                  <p className="text-xs font-semibold text-slate-400 hover:text-white text-sans">Google sin vincular</p>
-                  <p className="text-[10px] text-amber-500 font-bold uppercase tracking-widest font-mono font-sans animate-pulse">Clic para conectar</p>
+                  <p className="text-xs font-semibold text-slate-100">Geovanni Verse</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest font-mono font-sans">Administración</p>
                 </div>
-                <div className="w-8 h-8 rounded-full bg-slate-800 border border-dashed border-slate-600 flex items-center justify-center text-xs font-black text-slate-400">
+                <div className="w-8 h-8 rounded-full bg-slate-800 border-2 border-slate-700 flex items-center justify-center text-xs font-bold text-slate-205 shadow-sm">
                   G
                 </div>
               </>
@@ -746,6 +748,23 @@ export default function App() {
                 </span>
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0"></span>
               </button>
+
+              <button
+                onClick={() => setActiveTab('UserProfile')}
+                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                  activeTab === 'UserProfile'
+                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <User className="w-4 h-4 shrink-0" />
+                  Mi Perfil
+                </span>
+                <span className="text-[10px] bg-blue-50 text-blue-700 font-mono font-bold px-1.5 py-0.5 rounded">
+                  {role}
+                </span>
+              </button>
             </div>
           </div>
 
@@ -862,50 +881,19 @@ export default function App() {
                 onAddRecord={(nRecord) => {
                   setRecords((prev) => [nRecord, ...prev]);
                   syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');
-                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
-                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
-                  const token = localStorage.getItem('verse_sheet_token') || '';
-                  if (sheetUrl) {
-                    pushToGoogleSheets(sheetUrl, nRecord, 'CREATE', apiKey, token).then(res => {
-                      if (res.success) {
-                        appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} y sincronizó con Google Sheets.`);
-                      }
-                    });
-                  } else {
-                    appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
-                  }
+                  appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
                 }}
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
                   syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
-                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
-                  const token = localStorage.getItem('verse_sheet_token') || '';
-                  if (sheetUrl) {
-                    pushToGoogleSheets(sheetUrl, uRecord, 'UPDATE', apiKey, token).then(res => {
-                      if (res.success) {
-                        appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} y sincronizó con Google Sheets.`);
-                      }
-                    });
-                  } else {
-                    appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
-                  }
+                  appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
                 }}
                 onDeleteRecord={(delId) => {
                   const targetRecord = records.find(item => item.id === delId);
                   setRecords((prev) => prev.filter((item) => item.id !== delId));
                   if (targetRecord) {
                     syncCRMRecordToSupabaseIfNeeded(targetRecord, 'DELETE');
-                    const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
-                    const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
-                    const token = localStorage.getItem('verse_sheet_token') || '';
-                    if (sheetUrl) {
-                      pushToGoogleSheets(sheetUrl, targetRecord, 'DELETE', apiKey, token).then(res => {
-                        appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} y notificó a Google Sheets.`);
-                      });
-                    } else {
-                      appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
-                    }
+                    appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
                   }
                 }}
                 onShowAudit={appendAuditLog}
@@ -923,13 +911,6 @@ export default function App() {
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
                   syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                  // Trigger sheet support if configured
-                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
-                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
-                  const token = localStorage.getItem('verse_sheet_token') || '';
-                  if (sheetUrl) {
-                    pushToGoogleSheets(sheetUrl, uRecord, 'UPDATE', apiKey, token);
-                  }
                 }}
                 onShowAudit={appendAuditLog}
               />
@@ -961,12 +942,6 @@ export default function App() {
                 onUpdateRecord={(uRecord) => {
                   setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
                   syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                  const sheetUrl = localStorage.getItem('verse_sheet_url') || '';
-                  const apiKey = localStorage.getItem('verse_sheet_api_key') || '';
-                  const token = localStorage.getItem('verse_sheet_token') || '';
-                  if (sheetUrl) {
-                    pushToGoogleSheets(sheetUrl, uRecord, 'UPDATE', apiKey, token);
-                  }
                 }}
                 onShowAudit={appendAuditLog}
               />
@@ -1015,6 +990,16 @@ export default function App() {
                   setAuditLogs(syncedLogs || []);
                 }}
                 onShowAudit={appendAuditLog}
+              />
+            )}
+
+            {activeTab === 'UserProfile' && (
+              <UserProfileSection
+                googleUser={googleUser}
+                googleToken={googleToken}
+                role={role}
+                onChangeRole={(newRole) => setRole(newRole)}
+                onDisconnect={handleDisconnectGoogle}
               />
             )}
           </div>

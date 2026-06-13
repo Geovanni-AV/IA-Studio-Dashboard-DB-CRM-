@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CRMRecord, UserRole, FollowupEntry } from '../types';
+import { toValidUUID } from '../supabaseService';
 import { 
   Search, 
   Plus, 
@@ -44,9 +45,6 @@ export default function LeadsSection({
 }: LeadsSectionProps) {
   // Filtering & Search states
   const [searchTerm, setSearchTerm] = useState('');
-  const [clientFilter, setClientFilter] = useState('All');
-  const [plantFilter, setPlantFilter] = useState('All');
-  const [statusFilter, setStatusFilter] = useState('All');
 
   // Advanced Filter states
   const [activeTabFilter, setActiveTabFilter] = useState<'all' | 'active' | 'closed'>('all');
@@ -54,9 +52,7 @@ export default function LeadsSection({
   const [currentPage, setCurrentPage] = useState(1);
   const [yearFilter, setYearFilter] = useState('All');
   const [quarterFilter, setQuarterFilter] = useState('All');
-  const [temperatureFilter, setTemperatureFilter] = useState('All');
   const [regionFilter, setRegionFilter] = useState('All');
-  const [amountFilter, setAmountFilter] = useState('All');
   const [startDateFilter, setStartDateFilter] = useState('');
   const [endDateFilter, setEndDateFilter] = useState('');
   const [isAdvancedFiltersOpen, setIsAdvancedFiltersOpen] = useState(false);
@@ -79,7 +75,7 @@ export default function LeadsSection({
   const [formHardware, setFormHardware] = useState<number>(0);
   const [formServicios, setFormServicios] = useState<number>(0);
   const [formMoneda, setFormMoneda] = useState<'USD' | 'MXN'>('USD');
-  const [formStatus, setFormStatus] = useState<'Propuesta' | 'Negociación' | 'Cerrado Ganado'>('Propuesta');
+  const [formStatus, setFormStatus] = useState<'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null>(null);
   const [formNotas, setFormNotas] = useState('');
   const [formSustituye, setFormSustituye] = useState('');
   
@@ -115,7 +111,7 @@ export default function LeadsSection({
   // Reset page on filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, clientFilter, plantFilter, statusFilter, activeTabFilter, yearFilter, quarterFilter, temperatureFilter, regionFilter, amountFilter, startDateFilter, endDateFilter, colFilters]);
+  }, [searchTerm, activeTabFilter, yearFilter, quarterFilter, regionFilter, startDateFilter, endDateFilter, colFilters]);
 
   // Open Form for creating
   const handleOpenCreateMode = () => {
@@ -137,7 +133,7 @@ export default function LeadsSection({
     setFormHardware(5000);
     setFormServicios(2000);
     setFormMoneda('USD');
-    setFormStatus('Propuesta');
+    setFormStatus(null);
     setFormNotas('');
     setFormSustituye('');
     setIsFormOpen(true);
@@ -151,18 +147,18 @@ export default function LeadsSection({
     }
     setIsEditing(true);
     setFormId(rec.id);
-    setFormFolio(rec.informacion_general_folio);
-    setFormCliente(rec.informacion_general_cliente);
-    setFormPlanta(rec.informacion_general_planta);
-    setFormPais(rec.cliente_pais);
-    setFormUbicacion(rec.cliente_ubicacion);
-    setFormProyecto(rec.informacion_general_proyecto);
-    setFormLinkCotizacion(rec.informacion_general_link_cotizacion);
+    setFormFolio(rec.informacion_general_folio || '');
+    setFormCliente(rec.informacion_general_cliente || '');
+    setFormPlanta(rec.informacion_general_planta || '');
+    setFormPais(rec.cliente_pais || 'México');
+    setFormUbicacion(rec.cliente_ubicacion || '');
+    setFormProyecto(rec.informacion_general_proyecto || '');
+    setFormLinkCotizacion(rec.informacion_general_link_cotizacion || '');
     setFormHardware(rec.total_hardware_cotizacion);
     setFormServicios(rec.total_servicios_cotizacion);
     setFormMoneda(rec.informacion_general_moneda);
-    setFormStatus(rec.estado_proyecto);
-    setFormNotas(rec.notas_comerciales);
+    setFormStatus(rec.estado_proyecto || null);
+    setFormNotas(rec.notas_comerciales || '');
     setFormSustituye(rec.sustituye_folio_anterior || '');
     setIsFormOpen(true);
   };
@@ -200,41 +196,47 @@ export default function LeadsSection({
     }
 
     const existingRec = isEditing ? records.find(r => r.id === formId) : null;
-    let nextStatusProyecto = existingRec?.status_proyecto || 'Warm';
+    let nextStatusProyecto = existingRec?.status_proyecto || null;
     if (formStatus === 'Cerrado Ganado') {
       nextStatusProyecto = 'Win';
-    } else if (formStatus === 'Negociación' && nextStatusProyecto === 'Win') {
-      nextStatusProyecto = 'Hot';
-    } else if (formStatus === 'Propuesta' && nextStatusProyecto === 'Win') {
-      nextStatusProyecto = 'Cool';
+    } else if (formStatus === 'Negociación') {
+      if (nextStatusProyecto !== 'Hot' && nextStatusProyecto !== 'Warm') {
+        nextStatusProyecto = 'Warm';
+      }
+    } else if (formStatus === 'Propuesta') {
+      if (nextStatusProyecto !== 'Cool') {
+        nextStatusProyecto = 'Cool';
+      }
+    } else if (formStatus === null) {
+      nextStatusProyecto = null;
     }
 
     const payload: CRMRecord = {
-      id: formId || `rec_${Date.now()}`,
-      informacion_general_folio: formFolio,
+      id: formId || toValidUUID(`rec-${formFolio.toUpperCase().trim()}`),
+      informacion_general_folio: formFolio || null,
       fecha_registro: existingRec?.fecha_registro || new Date().toISOString().split('T')[0],
-      informacion_general_cliente: formCliente,
-      informacion_general_planta: formPlanta,
-      cliente_pais: formPais,
-      cliente_ubicacion: formUbicacion || 'México General',
-      informacion_general_proyecto: formProyecto,
-      informacion_general_link_cotizacion: formLinkCotizacion,
+      informacion_general_cliente: formCliente || null,
+      informacion_general_planta: formPlanta || null,
+      cliente_pais: formPais || null,
+      cliente_ubicacion: formUbicacion || null,
+      informacion_general_proyecto: formProyecto || null,
+      informacion_general_link_cotizacion: formLinkCotizacion || null,
       total_hardware_cotizacion: Number(formHardware),
       total_servicios_cotizacion: Number(formServicios),
       total_subtotal_cotizacion: subtotal,
       total_iva_cotizacion: iva,
       total_general_cotizacion: total,
       informacion_general_moneda: formMoneda,
-      estado_proyecto: formStatus,
-      status_proyecto: nextStatusProyecto,
-      notas_comerciales: formNotas,
+      estado_proyecto: formStatus || null,
+      status_proyecto: nextStatusProyecto || null,
+      notas_comerciales: formNotas || null,
       acciones_seguimiento: isEditing 
         ? (existingRec?.acciones_seguimiento || []) 
         : [],
-      sustituye_folio_anterior: formSustituye || undefined,
-      link_orden_compra: existingRec?.link_orden_compra || undefined,
-      folio_orden_compra: existingRec?.folio_orden_compra || undefined,
-      fecha_inicio_proyecto: existingRec?.fecha_inicio_proyecto || undefined,
+      sustituye_folio_anterior: formSustituye || null,
+      link_orden_compra: existingRec?.link_orden_compra || null,
+      folio_orden_compra: existingRec?.folio_orden_compra || null,
+      fecha_inicio_proyecto: existingRec?.fecha_inicio_proyecto || null,
       informacion_general_instalacion_incluida: existingRec?.informacion_general_instalacion_incluida ?? undefined
     };
 
@@ -268,7 +270,7 @@ export default function LeadsSection({
     if (r.status_proyecto === 'Hot') return 'Hot';
     if (r.status_proyecto === 'Warm') return 'Warm';
     if (r.status_proyecto === 'Cool') return 'Cool';
-    return (r.status_proyecto || 'Warm') as 'Win' | 'Hot' | 'Warm' | 'Cool';
+    return (r.status_proyecto || null) as 'Win' | 'Hot' | 'Warm' | 'Cool' | null;
   };
 
   const getRegionGroup = (r: CRMRecord) => {
@@ -308,8 +310,8 @@ export default function LeadsSection({
   };
 
   // Extract unique filter lists
-  const uniqueClients = Array.from(new Set(records.map((r) => r.informacion_general_cliente)));
-  const uniquePlants = Array.from(new Set(records.map((r) => r.informacion_general_planta)));
+  const uniqueClients = Array.from(new Set(records.map((r) => r.informacion_general_cliente).filter((c): c is string => !!c)));
+  const uniquePlants = Array.from(new Set(records.map((r) => r.informacion_general_planta).filter((p): p is string => !!p)));
 
   // Extract dynamic unique years list from records
   const uniqueYears = Array.from(
@@ -324,15 +326,12 @@ export default function LeadsSection({
   const baseFiltered = records.filter((r) => {
     // 1. General search
     const matchesSearch =
-      r.informacion_general_cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.informacion_general_proyecto.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.informacion_general_folio.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.informacion_general_planta.toLowerCase().includes(searchTerm.toLowerCase());
-
-    // 2. Base filters
-    const matchesClient = clientFilter === 'All' || r.informacion_general_cliente === clientFilter;
-    const matchesPlant = plantFilter === 'All' || r.informacion_general_planta === plantFilter;
-    const matchesStatus = statusFilter === 'All' || r.estado_proyecto === statusFilter;
+      !searchTerm ? true : (
+        (r.informacion_general_cliente || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (r.informacion_general_proyecto || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (r.informacion_general_folio || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (r.informacion_general_planta || '').toLowerCase().includes(searchTerm.toLowerCase())
+      );
 
     // 3. Tab filter (All, Activos, Cerrados)
     let matchesTab = true;
@@ -357,30 +356,17 @@ export default function LeadsSection({
       matchesDateRange = matchesDateRange && (r.fecha_registro <= endDateFilter);
     }
 
-    // 5. Temperature priority
-    const recordTemp = getTemperature(r);
-    const matchesTemp = temperatureFilter === 'All' || recordTemp === temperatureFilter;
-
     // 6. Region
     const recordRegion = getRegionGroup(r);
     const matchesRegion = regionFilter === 'All' || recordRegion === regionFilter;
 
-    // 7. Amount range
-    const recordAmount = getAmountGroup(r);
-    const matchesAmount = amountFilter === 'All' || recordAmount === amountFilter;
-
     return (
       matchesSearch &&
-      matchesClient &&
-      matchesPlant &&
-      matchesStatus &&
       matchesTab &&
       matchesYear &&
       matchesQuarter &&
       matchesDateRange &&
-      matchesTemp &&
-      matchesRegion &&
-      matchesAmount
+      matchesRegion
     );
   });
 
@@ -390,7 +376,7 @@ export default function LeadsSection({
       const activeValues = colFilters[colKey];
       if (!activeValues || activeValues.length === 0) continue;
       
-      let val = '';
+      let val: any = null;
       if (colKey === 'folio') val = r.informacion_general_folio;
       else if (colKey === 'client') val = r.informacion_general_cliente;
       else if (colKey === 'plant') val = r.informacion_general_planta;
@@ -404,10 +390,17 @@ export default function LeadsSection({
       }
       else if (colKey === 'status') val = r.estado_proyecto;
       else if (colKey === 'level') val = getTemperature(r);
-      else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas || 'S/N';
-      else if (colKey === 'oc') val = r.link_orden_compra || 'S/N';
+      else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
+      else if (colKey === 'oc') val = r.link_orden_compra;
 
-      if (!activeValues.includes(val)) {
+      let labelToCheck = '';
+      if (val === null || val === undefined || String(val).trim() === '') {
+        labelToCheck = 'null y campos faltantes';
+      } else {
+        labelToCheck = String(val).trim();
+      }
+
+      if (!activeValues.includes(labelToCheck)) {
         return false;
       }
     }
@@ -417,24 +410,32 @@ export default function LeadsSection({
   // Unique column values based on full pool of records
   const getUniqueColumnValues = (colKey: string) => {
     const rawValues = records.map((r) => {
-      if (colKey === 'folio') return r.informacion_general_folio;
-      if (colKey === 'client') return r.informacion_general_cliente;
-      if (colKey === 'plant') return r.informacion_general_planta;
-      if (colKey === 'project') return r.informacion_general_proyecto;
-      if (colKey === 'amount') {
+      let val: any = null;
+      if (colKey === 'folio') val = r.informacion_general_folio;
+      else if (colKey === 'client') val = r.informacion_general_cliente;
+      else if (colKey === 'plant') val = r.informacion_general_planta;
+      else if (colKey === 'project') val = r.informacion_general_proyecto;
+      else if (colKey === 'amount') {
         return r.total_general_cotizacion.toLocaleString('en-US', {
           style: 'currency',
           currency: r.informacion_general_moneda,
           minimumFractionDigits: 0
         });
       }
-      if (colKey === 'status') return r.estado_proyecto;
-      if (colKey === 'level') return getTemperature(r);
-      if (colKey === 'actions_followup') return r.acciones_seguimiento?.[0]?.notas || 'S/N';
-      if (colKey === 'oc') return r.link_orden_compra || 'S/N';
-      return '';
-    }).filter(Boolean);
+      else if (colKey === 'status') val = r.estado_proyecto;
+      else if (colKey === 'level') val = getTemperature(r);
+      else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
+      else if (colKey === 'oc') val = r.link_orden_compra;
+
+      if (val === null || val === undefined || String(val).trim() === '') {
+        return 'null y campos faltantes';
+      }
+      return String(val).trim();
+    });
+
     const sortedVals = Array.from(new Set(rawValues)).sort((a, b) => {
+      if (a === 'null y campos faltantes') return -1;
+      if (b === 'null y campos faltantes') return 1;
       return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
     });
     return sortedVals;
@@ -528,17 +529,17 @@ export default function LeadsSection({
     let valB: any = '';
     
     if (sortColumn === 'folio') {
-      valA = a.informacion_general_folio;
-      valB = b.informacion_general_folio;
+      valA = a.informacion_general_folio || '';
+      valB = b.informacion_general_folio || '';
     } else if (sortColumn === 'client') {
-      valA = a.informacion_general_cliente;
-      valB = b.informacion_general_cliente;
+      valA = a.informacion_general_cliente || '';
+      valB = b.informacion_general_cliente || '';
     } else if (sortColumn === 'plant') {
-      valA = a.informacion_general_planta;
-      valB = b.informacion_general_planta;
+      valA = a.informacion_general_planta || '';
+      valB = b.informacion_general_planta || '';
     } else if (sortColumn === 'project') {
-      valA = a.informacion_general_proyecto;
-      valB = b.informacion_general_proyecto;
+      valA = a.informacion_general_proyecto || '';
+      valB = b.informacion_general_proyecto || '';
     } else if (sortColumn === 'amount') {
       const getUSD = (rec: CRMRecord) => {
         let val = rec.total_general_cotizacion;
@@ -550,8 +551,8 @@ export default function LeadsSection({
       valA = getUSD(a);
       valB = getUSD(b);
     } else if (sortColumn === 'status') {
-      valA = a.estado_proyecto;
-      valB = b.estado_proyecto;
+      valA = a.estado_proyecto || '';
+      valB = b.estado_proyecto || '';
     } else if (sortColumn === 'level') {
       const getPriorityValue = (temp: string) => {
         if (temp === 'Win') return 4;
@@ -746,7 +747,12 @@ export default function LeadsSection({
                             onChange={() => handleToggleValChecked(colKey, valOption)}
                             className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
                           />
-                          <span className="truncate text-slate-650 text-[11px]" title={valOption}>{valOption}</span>
+                          <span 
+                            className={`truncate text-[11px] ${valOption === 'null y campos faltantes' ? 'text-slate-400 italic bg-slate-100/30 px-1 rounded border border-dashed border-slate-200' : 'text-slate-650'}`} 
+                            title={valOption === 'null y campos faltantes' ? 'null o vacíos' : valOption}
+                          >
+                            {valOption === 'null y campos faltantes' ? '[null / vacíos]' : valOption}
+                          </span>
                         </label>
                       );
                     })}
@@ -907,15 +913,11 @@ export default function LeadsSection({
           <button
             onClick={() => {
               setSearchTerm('');
-              setClientFilter('All');
-              setPlantFilter('All');
-              setStatusFilter('All');
+              setColFilters({});
               setActiveTabFilter('all');
               setYearFilter('All');
               setQuarterFilter('All');
-              setTemperatureFilter('All');
               setRegionFilter('All');
-              setAmountFilter('All');
               setStartDateFilter('');
               setEndDateFilter('');
             }}
@@ -941,92 +943,20 @@ export default function LeadsSection({
         </div>
       </div>
 
-      {/* FILTER CONTROL BOARD */}
-      <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-3xs space-y-4">
-        {/* Row 1: Primary Search Controls */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-          <div>
-            <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-label-caps">
-              Búsqueda General
-            </label>
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="e.g. Bimbo, VT-1553, Silao..."
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 pl-8 pr-3 rounded-md hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-800"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-label-caps">
-              CORPORATIVO B2B
-            </label>
-            <select
-              value={clientFilter}
-              onChange={(e) => setClientFilter(e.target.value)}
-              className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
-            >
-              <option value="All">Todos los Clientes</option>
-              {uniqueClients.map((client) => (
-                <option key={client} value={client}>
-                  {client}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-label-caps">
-              PLANTA INDUSTRIAL
-            </label>
-            <select
-              value={plantFilter}
-              onChange={(e) => setPlantFilter(e.target.value)}
-              className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
-            >
-              <option value="All">Todas las Plantas</option>
-              {uniquePlants.map((plant) => (
-                <option key={plant} value={plant}>
-                  {plant}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-slate-505 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-label-caps">
-              ESTADO PIPELINE
-            </label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
-            >
-              <option value="All">Todos los Estados</option>
-              <option value="Propuesta">Propuesta</option>
-              <option value="Negociación">Negociación</option>
-              <option value="Cerrado Ganado">Cerrado Ganado</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Dynamic & Collapsible Second Row: Advanced Filters */}
-        {isAdvancedFiltersOpen && (
-          <div className="pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end animate-fade-in animate-duration-200">
-            {/* Year filter requested */}
+      {/* FILTER CONTROL BOARD (SOLO NO DUPLICADOS Y DINÁMICO) */}
+      {isAdvancedFiltersOpen && (
+        <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-3xs animate-in fade-in slide-in-from-top-2 duration-200 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end">
+            {/* Year filter */}
             <div>
-              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-mono flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-slate-400" />
+              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1.5 px-1 font-sans flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
                 Año Registro
               </label>
               <select
                 value={yearFilter}
                 onChange={(e) => setYearFilter(e.target.value)}
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
+                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800 font-medium cursor-pointer"
               >
                 <option value="All">Todos los Años</option>
                 {uniqueYears.map((year) => (
@@ -1035,15 +965,15 @@ export default function LeadsSection({
               </select>
             </div>
 
-            {/* Quarter requested (Q1, Q2, Q3...) */}
+            {/* Quarter filter */}
             <div>
-              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-mono">
+              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1.5 px-1 font-sans">
                 Trimestre (Quarter)
               </label>
               <select
                 value={quarterFilter}
                 onChange={(e) => setQuarterFilter(e.target.value)}
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
+                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800 font-medium cursor-pointer"
               >
                 <option value="All">Todos (Quarters)</option>
                 <option value="Q1">Q1 (Ene-Mar)</option>
@@ -1053,35 +983,16 @@ export default function LeadsSection({
               </select>
             </div>
 
-            {/* Temperatures: Win, Hot, Warm, Cool requested */}
-            <div>
-              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-mono flex items-center gap-1">
-                <Flame className="w-3 h-3 text-red-500" />
-                Termo / Prioridad
-              </label>
-              <select
-                value={temperatureFilter}
-                onChange={(e) => setTemperatureFilter(e.target.value)}
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
-              >
-                <option value="All">Todas las prioridades</option>
-                <option value="Win">🏆 Win (Ganados)</option>
-                <option value="Hot">🔥 Hot (Negociaciones altas)</option>
-                <option value="Warm">⚡ Warm (Activos soporte)</option>
-                <option value="Cool">❄️ Cool (Exploratorios)</option>
-              </select>
-            </div>
-
             {/* Regions requested */}
             <div>
-              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-mono flex items-center gap-1">
-                <MapPin className="w-3 h-3 text-blue-500" />
-                Regiones Geográficas
+              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1.5 px-1 font-sans flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5 text-blue-500" />
+                Región Geográfica
               </label>
               <select
                 value={regionFilter}
                 onChange={(e) => setRegionFilter(e.target.value)}
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
+                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2.5 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800 font-medium cursor-pointer"
               >
                 <option value="All">Todas las regiones</option>
                 <option value="Centro">México Centro (CDMX/EdoMex)</option>
@@ -1094,52 +1005,70 @@ export default function LeadsSection({
               </select>
             </div>
 
-            {/* Price threshold ranges */}
-            <div>
-              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1 px-1 font-mono flex items-center gap-1">
-                <DollarSign className="w-3 h-3 text-emerald-600" />
-                Escala de Monto
-              </label>
-              <select
-                value={amountFilter}
-                onChange={(e) => setAmountFilter(e.target.value)}
-                className="text-xs w-full bg-slate-50 border border-slate-200 py-2 px-2 rounded-md outline-none focus:ring-1 focus:ring-blue-500 text-slate-800"
-              >
-                <option value="All">Todos los montos</option>
-                <option value="low">Pequeño (&lt; $15K USD)</option>
-                <option value="medium">Mediano ($15k - $50K USD)</option>
-                <option value="high">Grande (&gt; $50K USD)</option>
-              </select>
-            </div>
-
             {/* Specific Dates ranges */}
-            <div className="grid grid-cols-2 gap-1.5">
-              <div>
-                <label className="block text-slate-400 text-[8px] font-bold uppercase">Desde</label>
-                <input
-                  type="date"
-                  value={startDateFilter}
-                  onChange={(e) => setStartDateFilter(e.target.value)}
-                  className="text-[10px] w-full bg-slate-50 border border-slate-250 p-1.5 focus:ring-1 outline-none text-slate-750 font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-400 text-[8px] font-bold uppercase">Hasta</label>
-                <input
-                  type="date"
-                  value={endDateFilter}
-                  onChange={(e) => setEndDateFilter(e.target.value)}
-                  className="text-[10px] w-full bg-slate-50 border border-slate-250 p-1.5 focus:ring-1 outline-none text-slate-755 font-mono"
-                />
+            <div>
+              <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px] mb-1.5 px-1 font-sans">
+                Rango de Fechas
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <input
+                    type="date"
+                    value={startDateFilter}
+                    onChange={(e) => setStartDateFilter(e.target.value)}
+                    className="text-[10px] w-full bg-slate-50 border border-slate-200 py-1.5 px-2 rounded hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 text-slate-750 font-mono cursor-pointer"
+                    title="Fecha Inicial"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="date"
+                    value={endDateFilter}
+                    onChange={(e) => setEndDateFilter(e.target.value)}
+                    className="text-[10px] w-full bg-slate-50 border border-slate-200 py-1.5 px-2 rounded hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 text-slate-755 font-mono cursor-pointer"
+                    title="Fecha Final"
+                  />
+                </div>
               </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Main CRM records table inside a 3D bevel elevated paper card */}
       <div className="relative bg-slate-100/40 p-4 rounded-xl border border-slate-200 shadow-[inset_0_2px_4px_rgba(15,23,42,0.05)] mb-6">
         <div className="bg-white border-t border-l border-slate-200 border-r-2 border-b-6 border-b-[#c3cbd5] border-r-[#e2e8f0] rounded-xl shadow-[0_20px_45px_-12px_rgba(15,23,42,0.18),_0_0_0_1px_rgba(15,23,42,0.03),_0_8px_16px_-8px_rgba(15,23,42,0.1)] overflow-hidden transition-all duration-300 hover:shadow-[0_26px_55px_-10px_rgba(15,23,42,0.22)] hover:translate-y-[-1px]">
+          
+          {/* CONTROL DE BÚSQUEDA INTERNO DE LA TABLA (INTEGRATED TOOLBAR) */}
+          <div className="bg-slate-50/80 px-4 py-3 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Buscar por folio, cliente, planta o descripción..."
+                className="text-xs w-full bg-white border border-slate-250 py-2 pl-9 pr-8 rounded-lg hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-800 shadow-3xs font-medium"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+              <span className="bg-white border border-slate-200 px-2.5 py-1 rounded-md shadow-3xs text-slate-705 font-mono">
+                {filteredRecords.length}
+              </span>
+              <span>de {records.length} registros totales</span>
+            </div>
+          </div>
+
           <div className="overflow-x-auto max-h-[640px] overflow-y-auto scrollbar-thin min-h-[400px]">
             <table className="w-full text-left border-collapse table-auto">
               <thead className="bg-[#f8fafc] border-b-2 border-slate-200 text-xs uppercase text-slate-500 font-label-caps sticky top-0 z-20 shadow-2xs">
@@ -1170,16 +1099,16 @@ export default function LeadsSection({
                       className="border-b border-slate-200/80 last:border-b-0 odd:bg-white even:bg-slate-100/50 hover:bg-blue-50/30 transition-colors group"
                     >
                       <td className={`p-3 px-4 font-bold font-data-mono text-[#004ddf] text-xs truncate ${getColWidthClass('folio')}`}>
-                        {r.informacion_general_folio}
+                        {r.informacion_general_folio || <span className="text-slate-400 font-normal italic">null</span>}
                       </td>
-                      <td className={`p-3 px-4 text-[#0b1c30] truncate ${getColWidthClass('client')}`} title={r.informacion_general_cliente}>
-                        <span className="font-bold">{r.informacion_general_cliente}</span>
+                      <td className={`p-3 px-4 text-[#0b1c30] truncate ${getColWidthClass('client')}`} title={r.informacion_general_cliente || ''}>
+                        {r.informacion_general_cliente ? <span className="font-bold">{r.informacion_general_cliente}</span> : <span className="text-slate-400 font-normal italic text-xs">null</span>}
                       </td>
-                      <td className={`p-3 px-4 text-slate-500 truncate ${getColWidthClass('plant')}`} title={r.informacion_general_planta}>
-                        {r.informacion_general_planta}
+                      <td className={`p-3 px-4 text-slate-500 truncate ${getColWidthClass('plant')}`} title={r.informacion_general_planta || ''}>
+                        {r.informacion_general_planta || <span className="text-slate-400 font-normal italic">null</span>}
                       </td>
-                      <td className={`p-3 px-4 text-slate-700 font-medium truncate ${getColWidthClass('project')}`} title={r.informacion_general_proyecto}>
-                        {r.informacion_general_proyecto}
+                      <td className={`p-3 px-4 text-slate-700 font-medium truncate ${getColWidthClass('project')}`} title={r.informacion_general_proyecto || ''}>
+                        {r.informacion_general_proyecto || <span className="text-slate-400 font-normal italic">null</span>}
                       </td>
                       <td className={`p-3 px-4 text-right font-bold text-slate-900 font-data-mono truncate ${getColWidthClass('amount')}`}>
                         {r.total_general_cotizacion.toLocaleString('en-US', {
@@ -1647,10 +1576,11 @@ export default function LeadsSection({
                     Estado de Proyecto
                   </label>
                   <select
-                    value={formStatus}
-                    onChange={(e) => setFormStatus(e.target.value as any)}
+                    value={formStatus || ''}
+                    onChange={(e) => setFormStatus((e.target.value || null) as any)}
                     className="text-xs w-full bg-slate-50 border border-slate-200 p-2 text-[#0b1c30] outline-none"
                   >
+                    <option value="">[Sin definir / null]</option>
                     <option value="Propuesta">Propuesta</option>
                     <option value="Negociación">Negociación</option>
                     <option value="Cerrado Ganado">Cerrado Ganado</option>
@@ -1819,7 +1749,14 @@ function getStatusBadge(status: string) {
   }
 }
 
-function renderTemperatureBadge(temp: string) {
+function renderTemperatureBadge(temp: string | null | undefined) {
+  if (!temp) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-normal text-slate-400 bg-slate-50 border border-slate-200 italic">
+        null
+      </span>
+    );
+  }
   switch (temp) {
     case 'Win':
       return (
@@ -1935,15 +1872,16 @@ function EstadoCell({
     };
   }, [isOpen]);
 
-  const options: ('Propuesta' | 'Negociación' | 'Cerrado Ganado')[] = ['Propuesta', 'Negociación', 'Cerrado Ganado'];
+  const options: ('Propuesta' | 'Negociación' | 'Cerrado Ganado' | null)[] = ['Propuesta', 'Negociación', 'Cerrado Ganado', null];
 
-  const getStatusBadgeClass = (status: string) => {
+  const getStatusBadgeClass = (status: string | null | undefined) => {
+    if (!status) return 'bg-slate-50 text-slate-400 border-slate-200 font-normal italic hover:bg-slate-100';
     if (status === 'Cerrado Ganado') return 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100';
     if (status === 'Negociación') return 'bg-amber-50 text-amber-700 border-amber-100 hover:bg-amber-100';
     return 'bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100';
   };
 
-  const handleSelect = (status: 'Propuesta' | 'Negociación' | 'Cerrado Ganado') => {
+  const handleSelect = (status: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null) => {
     if (role === 'Solo Lectura') return;
     
     let nextStatusProyecto = record.status_proyecto;
@@ -1953,6 +1891,8 @@ function EstadoCell({
       nextStatusProyecto = 'Hot';
     } else if (status === 'Propuesta' && nextStatusProyecto === 'Win') {
       nextStatusProyecto = 'Cool';
+    } else if (status === null) {
+      nextStatusProyecto = null;
     }
 
     onUpdate({
@@ -1978,7 +1918,7 @@ function EstadoCell({
         title="Cambiar Fase Comercial"
       >
         <span className={`inline-block px-2 text-[10px] font-bold py-0.5 rounded-full border transition-all ${getStatusBadgeClass(record.estado_proyecto)}`}>
-          {record.estado_proyecto} <span className="ml-0.5 text-[8px] opacity-70">▼</span>
+          {record.estado_proyecto || 'null'} <span className="ml-0.5 text-[8px] opacity-70">▼</span>
         </span>
       </button>
 
@@ -1990,7 +1930,7 @@ function EstadoCell({
           <div className="p-1 space-y-1">
             {options.map((opt) => (
               <button
-                key={opt}
+                key={opt || 'null'}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2000,7 +1940,7 @@ function EstadoCell({
                   record.estado_proyecto === opt ? 'bg-slate-50/50 font-bold text-blue-700' : 'text-slate-700'
                 }`}
               >
-                <span>{opt}</span>
+                <span className={opt ? "" : "italic text-slate-400 font-normal"}>{opt || 'null'}</span>
                 {record.estado_proyecto === opt && <span className="text-[9px] text-blue-600">✓</span>}
               </button>
             ))}
@@ -2096,7 +2036,7 @@ function NivelTermoCell({
 }: {
   record: CRMRecord;
   role: string;
-  currentTemp: string;
+  currentTemp: 'Win' | 'Hot' | 'Warm' | 'Cool' | null;
   onUpdate: (rec: CRMRecord) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -2116,17 +2056,19 @@ function NivelTermoCell({
     };
   }, [isOpen]);
 
-  const levels: ('Win' | 'Hot' | 'Warm' | 'Cool')[] = ['Win', 'Hot', 'Warm', 'Cool'];
+  const levels: ('Win' | 'Hot' | 'Warm' | 'Cool' | null)[] = ['Win', 'Hot', 'Warm', 'Cool', null];
 
-  const handleSelect = (lvl: 'Win' | 'Hot' | 'Warm' | 'Cool') => {
+  const handleSelect = (lvl: 'Win' | 'Hot' | 'Warm' | 'Cool' | null) => {
     if (role === 'Solo Lectura') return;
-    let newStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
+    let newStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null = record.estado_proyecto || null;
     if (lvl === 'Win') {
       newStatus = 'Cerrado Ganado';
     } else if (lvl === 'Hot' || lvl === 'Warm') {
       newStatus = 'Negociación';
-    } else {
+    } else if (lvl === 'Cool') {
       newStatus = 'Propuesta';
+    } else if (lvl === null) {
+      newStatus = null;
     }
     onUpdate({ 
       ...record, 
@@ -2162,7 +2104,7 @@ function NivelTermoCell({
           <div className="p-1 space-y-1">
             {levels.map((lvl) => (
               <button
-                key={lvl}
+                key={lvl || 'null'}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();

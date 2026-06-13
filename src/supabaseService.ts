@@ -387,50 +387,44 @@ export function mapRawCRMRecord(r: any): CRMRecord {
   const rawMoneda = String(getFlexibleValue(r, ['informacion_general_moneda', 'moneda', 'Moneda'], 'USD')).toUpperCase();
   const moneda = (rawMoneda === 'MXN' ? 'MXN' : 'USD') as 'USD' | 'MXN';
 
-  const rawEstado = String(getFlexibleValue(r, ['estado_proyecto', 'estado', 'Estado', 'estado_proyecto'], '')).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  let finalEstado: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
-  if (rawEstado.includes('ganado') || rawEstado.includes('cerrado')) {
-    finalEstado = 'Cerrado Ganado';
-  } else if (rawEstado.includes('negociacion') || rawEstado.includes('negotiation') || rawEstado.includes('proceso')) {
-    finalEstado = 'Negociación';
-  } else {
-    const altStatus = String(getFlexibleValue(r, ['status_proyecto', 'status', 'Status', 'status_proyecto'], '')).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (altStatus.includes('ganado') || altStatus.includes('cerrado')) {
+  const rawEstadoVal = getFlexibleValue(r, ['estado_proyecto', 'estado', 'Estado', 'estado_proyecto'], null);
+  let finalEstado: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null = null;
+  if (rawEstadoVal !== null && String(rawEstadoVal).trim() !== '') {
+    const rawEstado = String(rawEstadoVal).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (rawEstado.includes('ganado') || rawEstado.includes('cerrado')) {
       finalEstado = 'Cerrado Ganado';
-    } else if (altStatus.includes('negociacion') || altStatus.includes('negotiation')) {
+    } else if (rawEstado.includes('negociacion') || rawEstado.includes('negotiation') || rawEstado.includes('proceso')) {
       finalEstado = 'Negociación';
-    } else {
+    } else if (rawEstado.includes('propuesta') || rawEstado.includes('proposal')) {
       finalEstado = 'Propuesta';
     }
   }
 
-  const rawStatusVal = String(getFlexibleValue(r, ['status_proyecto', 'prioridad_nivel', 'prioridad', 'status_proyecto'], 'Warm')).trim().toLowerCase();
-  let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' = 'Warm';
-  if (rawStatusVal.includes('win')) finalStatusNivel = 'Win';
-  else if (rawStatusVal.includes('hot')) finalStatusNivel = 'Hot';
-  else if (rawStatusVal.includes('cool')) finalStatusNivel = 'Cool';
-  else if (rawStatusVal.includes('warm')) finalStatusNivel = 'Warm';
-  else {
-    if (finalEstado === 'Cerrado Ganado') finalStatusNivel = 'Win';
-    else if (finalEstado === 'Negociación') finalStatusNivel = 'Hot';
-    else finalStatusNivel = 'Cool';
+  const rawStatusVal = getFlexibleValue(r, ['status_proyecto', 'prioridad_nivel', 'prioridad', 'status_proyecto', 'status', 'Status'], null);
+  let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' | null = null;
+  if (rawStatusVal !== null && String(rawStatusVal).trim() !== '') {
+    const rawStatus = String(rawStatusVal).trim().toLowerCase();
+    if (rawStatus.includes('win')) finalStatusNivel = 'Win';
+    else if (rawStatus.includes('hot')) finalStatusNivel = 'Hot';
+    else if (rawStatus.includes('cool')) finalStatusNivel = 'Cool';
+    else if (rawStatus.includes('warm')) finalStatusNivel = 'Warm';
   }
 
-  const detectedFolioOc = String(getFlexibleValue(r, ['folio_orden_compra', 'folio_oc', 'folio oc', 'Folio OC', 'folio_orden_compra'], ''));
+  const detectedFolioOc = String(getFlexibleValue(r, ['folio_orden_compra', 'folio_oc', 'folio oc', 'Folio OC', 'folio_orden_compra'], '')).trim();
 
   const rawInstalacion = getFlexibleValue(r, ['informacion_general_instalacion_incluida', 'instalacion_incluida', 'instalacion incluida', 'instalacion'], false);
   const instalacion = rawInstalacion === true || rawInstalacion === 'true' || rawInstalacion === 't' || rawInstalacion === 1 || rawInstalacion === '1';
 
   return {
     id: toValidUUID(String(getFlexibleValue(r, ['id', 'ID', '_id', 'informacion_general_folio', 'folio', 'Folio']) || '')),
-    informacion_general_folio: getFlexibleValue(r, ['informacion_general_folio', 'folio', 'Folio']) || 'S/F',
-    fecha_registro: getFlexibleValue(r, ['informacion_general_fecha', 'fecha_registro', 'fecha registro', 'fecha', 'registro', 'Fecha Registro']) || new Date().toISOString().split('T')[0],
-    informacion_general_cliente: getFlexibleValue(r, ['informacion_general_cliente', 'cliente', 'Cliente']) || 'Desconocido',
-    informacion_general_planta: getFlexibleValue(r, ['informacion_general_planta', 'planta', 'Planta']) || 'Principal',
-    cliente_pais: getFlexibleValue(r, ['cliente_pais', 'pais', 'Pais', 'country']) || 'México',
-    cliente_ubicacion: getFlexibleValue(r, ['cliente_ubicacion', 'ubicacion', 'Ubicacion', 'ciudad', 'location']) || '',
-    informacion_general_proyecto: getFlexibleValue(r, ['informacion_general_proyecto', 'proyecto', 'Proyecto']) || 'Nuevo Proyecto',
-    informacion_general_link_cotizacion: getFlexibleValue(r, ['informacion_general_link_cotizacion', 'link_cotizacion', 'link cotizacion', 'Link Cotizacion', 'cotizacion']) || '',
+    informacion_general_folio: getFlexibleValue(r, ['informacion_general_folio', 'folio', 'Folio']) || null,
+    fecha_registro: getFlexibleValue(r, ['informacion_general_fecha', 'fecha_registro', 'fecha registro', 'fecha', 'registro', 'Fecha Registro']) || null,
+    informacion_general_cliente: getFlexibleValue(r, ['informacion_general_cliente', 'cliente', 'Cliente']) || null,
+    informacion_general_planta: getFlexibleValue(r, ['informacion_general_planta', 'planta', 'Planta']) || null,
+    cliente_pais: getFlexibleValue(r, ['cliente_pais', 'pais', 'Pais', 'country']) || null,
+    cliente_ubicacion: getFlexibleValue(r, ['cliente_ubicacion', 'ubicacion', 'Ubicacion', 'ciudad', 'location']) || null,
+    informacion_general_proyecto: getFlexibleValue(r, ['informacion_general_proyecto', 'proyecto', 'Proyecto']) || null,
+    informacion_general_link_cotizacion: getFlexibleValue(r, ['informacion_general_link_cotizacion', 'link_cotizacion', 'link cotizacion', 'Link Cotizacion', 'cotizacion']) || null,
     total_hardware_cotizacion: hardware,
     total_servicios_cotizacion: servicios,
     total_subtotal_cotizacion: subtotal,
@@ -439,13 +433,13 @@ export function mapRawCRMRecord(r: any): CRMRecord {
     informacion_general_moneda: moneda,
     estado_proyecto: finalEstado,
     status_proyecto: finalStatusNivel,
-    folio_orden_compra: detectedFolioOc || undefined,
-    link_orden_compra: getFlexibleValue(r, ['link_orden_compra', 'link_oc', 'link oc', 'Link OC', 'link_orden_compra']) || undefined,
-    fecha_inicio_proyecto: getFlexibleValue(r, ['fecha_inicio_proyecto', 'fecha_inicio', 'fecha inicio', 'Fecha Inicio']) || undefined,
+    folio_orden_compra: detectedFolioOc || null,
+    link_orden_compra: getFlexibleValue(r, ['link_orden_compra', 'link_oc', 'link oc', 'Link OC', 'link_orden_compra']) || null,
+    fecha_inicio_proyecto: getFlexibleValue(r, ['fecha_inicio_proyecto', 'fecha_inicio', 'fecha inicio', 'Fecha Inicio']) || null,
     informacion_general_instalacion_incluida: instalacion,
-    notas_comerciales: getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales']) || '',
+    notas_comerciales: getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales']) || null,
     acciones_seguimiento: acciones_parsed,
-    sustituye_folio_anterior: getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior']) || undefined,
+    sustituye_folio_anterior: getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior']) || null,
     prioridad_nivel: finalStatusNivel
   };
 }
@@ -787,6 +781,35 @@ export async function deleteCRMRecordFromSupabase(
 }
 
 /**
+ * Deletes multiple CRMRecords from Supabase in batch
+ */
+export async function deleteCRMRecordsFromSupabase(
+  url: string,
+  key: string,
+  recordIds: string[]
+): Promise<boolean> {
+  const client = getSupabaseClient(url, key);
+  if (!client) return false;
+
+  try {
+    const validUUIDs = recordIds.map(toValidUUID);
+    const { error } = await client
+      .from(getResolvedCRMTableName())
+      .delete()
+      .in('id', validUUIDs);
+
+    if (error) {
+      console.error('Error al eliminar expedientes múltiples en Supabase:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error de red al eliminar múltiples en Supabase:', err);
+    return false;
+  }
+}
+
+/**
  * Pushes/Upserts a single Contact to Supabase contacts
  */
 export async function pushContactToSupabase(
@@ -951,33 +974,207 @@ export async function bulkUploadToSupabase(
   }
 
   try {
-    let recCount = 0;
-    let conCount = 0;
-    let audCount = 0;
+    // 1. Batch upload CRM records
+    const recordsPayloads = records.map(rec => {
+      const hardware = Number(rec.total_hardware_cotizacion) || 0;
+      const servicios = Number(rec.total_servicios_cotizacion) || 0;
+      const subtotal = hardware + servicios;
+      const iva = parseFloat((subtotal * 0.16).toFixed(2));
+      const general = parseFloat((subtotal + iva).toFixed(2));
+      const validUUID = toValidUUID(rec.id);
 
-    for (const rec of records) {
-      const ok = await pushCRMRecordToSupabase(url, key, rec);
-      if (ok) recCount++;
+      const standardPayload: any = {
+        id: validUUID,
+        informacion_general_folio: rec.informacion_general_folio,
+        fecha_registro: rec.fecha_registro,
+        informacion_general_fecha: rec.fecha_registro,
+        informacion_general_cliente: rec.informacion_general_cliente,
+        informacion_general_planta: rec.informacion_general_planta,
+        cliente_pais: rec.cliente_pais,
+        cliente_ubicacion: rec.cliente_ubicacion,
+        informacion_general_proyecto: rec.informacion_general_proyecto,
+        informacion_general_link_cotizacion: rec.informacion_general_link_cotizacion,
+        total_hardware_cotizacion: hardware,
+        total_servicios_cotizacion: servicios,
+        total_subtotal_cotizacion: subtotal,
+        total_iva_cotizacion: iva,
+        total_general_cotizacion: general,
+        informacion_general_moneda: rec.informacion_general_moneda,
+        estado_proyecto: rec.estado_proyecto,
+        status_proyecto: rec.status_proyecto,
+        folio_orden_compra: rec.folio_orden_compra || null,
+        link_orden_compra: rec.link_orden_compra || null,
+        fecha_inicio_proyecto: rec.fecha_inicio_proyecto || null,
+        informacion_general_instalacion_incluida: rec.informacion_general_instalacion_incluida ?? null,
+        notas_comerciales: rec.notas_comerciales,
+        acciones_seguimiento: rec.acciones_seguimiento,
+        sustituye_folio_anterior: rec.sustituye_folio_anterior || null,
+        prioridad_nivel: rec.status_proyecto || null
+      };
+
+      const shortPayload: any = {
+        id: validUUID,
+        folio: rec.informacion_general_folio,
+        fecha_registro: rec.fecha_registro,
+        informacion_general_fecha: rec.fecha_registro,
+        cliente: rec.informacion_general_cliente,
+        planta: rec.informacion_general_planta,
+        pais: rec.cliente_pais,
+        ubicacion: rec.cliente_ubicacion,
+        proyecto: rec.informacion_general_proyecto,
+        link_cotizacion: rec.informacion_general_link_cotizacion,
+        hardware: hardware,
+        servicios: servicios,
+        subtotal: subtotal,
+        iva: iva,
+        total: general,
+        moneda: rec.informacion_general_moneda,
+        estado_proyecto: rec.estado_proyecto,
+        status: rec.status_proyecto,
+        folio_oc: rec.folio_orden_compra || null,
+        link_oc: rec.link_orden_compra || null,
+        fecha_inicio: rec.fecha_inicio_proyecto || null,
+        instalacion: rec.informacion_general_instalacion_incluida ?? null,
+        notas: rec.notas_comerciales,
+        acciones: rec.acciones_seguimiento,
+        sustituye: rec.sustituye_folio_anterior || null,
+        prioridad: rec.status_proyecto || null
+      };
+
+      const payload: any = { id: validUUID };
+      if (knownCRMTableColumns.length > 0) {
+        for (const col of knownCRMTableColumns) {
+          if (col === 'id') continue;
+          if (standardPayload[col] !== undefined) {
+            payload[col] = standardPayload[col];
+          } else if (shortPayload[col] !== undefined) {
+            payload[col] = shortPayload[col];
+          } else {
+            const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+            let matched = false;
+            for (const k of Object.keys(standardPayload)) {
+              if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+                payload[col] = standardPayload[k];
+                matched = true;
+                break;
+              }
+            }
+            if (!matched) {
+              for (const k of Object.keys(shortPayload)) {
+                if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+                  payload[col] = shortPayload[k];
+                  matched = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } else {
+        const targetTable = getResolvedCRMTableName();
+        const useStandard = targetTable === 'crm_records' || targetTable === 'DB CRM' || targetTable === 'DB_CRM' || targetTable === 'db_crm';
+        Object.assign(payload, useStandard ? standardPayload : shortPayload);
+      }
+      return payload;
+    });
+
+    if (recordsPayloads.length > 0) {
+      const { error: recErr } = await client
+        .from(getResolvedCRMTableName())
+        .upsert(recordsPayloads, { onConflict: 'id' });
+      if (recErr) throw recErr;
     }
 
-    for (const con of contacts) {
-      const ok = await pushContactToSupabase(url, key, con);
-      if (ok) conCount++;
+    // 2. Batch upload contacts
+    const contactsPayloads = contacts.map(con => {
+      const validUUID = toValidUUID(con.id);
+      const standardPayload: any = {
+        id: validUUID,
+        nombre: con.nombre,
+        puesto: con.puesto,
+        cliente: con.cliente,
+        planta: con.planta,
+        email: con.email,
+        telefono: con.telefono,
+        esEnlaceComercial: con.esEnlaceComercial
+      };
+      const payload: any = { id: validUUID };
+      if (knownContactsColumns.length > 0) {
+        for (const col of knownContactsColumns) {
+          if (col === 'id') continue;
+          if (standardPayload[col] !== undefined) {
+            payload[col] = standardPayload[col];
+          } else {
+            const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+            for (const k of Object.keys(standardPayload)) {
+              if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+                payload[col] = standardPayload[k];
+                break;
+              }
+            }
+          }
+        }
+      } else {
+        Object.assign(payload, standardPayload);
+      }
+      return payload;
+    });
+
+    if (contactsPayloads.length > 0) {
+      const { error: conErr } = await client
+        .from(getResolvedContactsTableName())
+        .upsert(contactsPayloads, { onConflict: 'id' });
+      if (conErr) throw conErr;
     }
 
-    for (const aud of auditLogs) {
-      const ok = await pushAuditLogToSupabase(url, key, aud);
-      if (ok) audCount++;
+    // 3. Batch upload audit logs
+    const auditPayloads = auditLogs.map(aud => {
+      const validUUID = toValidUUID(aud.id);
+      const standardPayload: any = {
+        id: validUUID,
+        fecha: aud.fecha,
+        accion: aud.accion,
+        operador: aud.operador,
+        perfil: aud.perfil,
+        detalles: aud.detalles
+      };
+      const payload: any = { id: validUUID };
+      if (knownAuditLogsColumns.length > 0) {
+        for (const col of knownAuditLogsColumns) {
+          if (col === 'id') continue;
+          if (standardPayload[col] !== undefined) {
+            payload[col] = standardPayload[col];
+          } else {
+            const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+            for (const k of Object.keys(standardPayload)) {
+              if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+                payload[col] = standardPayload[k];
+                break;
+              }
+            }
+          }
+        }
+      } else {
+        Object.assign(payload, standardPayload);
+      }
+      return payload;
+    });
+
+    if (auditPayloads.length > 0) {
+      const { error: audErr } = await client
+        .from(getResolvedAuditLogsTableName())
+        .upsert(auditPayloads, { onConflict: 'id' });
+      if (audErr) throw audErr;
     }
 
     return {
       success: true,
-      message: `Exportación consolidada exitosa. Se subieron ${recCount}/${records.length} expedientes a "${getResolvedCRMTableName()}", ${conCount}/${contacts.length} contactos a "${getResolvedContactsTableName()}" y ${audCount}/${auditLogs.length} logs a "${getResolvedAuditLogsTableName()}".`
+      message: `Exportación consolidada exitosa. Se subieron ${records.length} expedientes, ${contacts.length} contactos y ${auditLogs.length} logs en 3 transacciones atómicas de bloque a Supabase.`
     };
   } catch (error: any) {
     return {
       success: false,
-      message: `Error al realizar carga masiva: ${error.message}`,
+      message: `Error al realizar carga masiva por lotes: ${error.message}`,
       rawError: error
     };
   }

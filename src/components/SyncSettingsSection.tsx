@@ -114,8 +114,30 @@ export default function SyncSettingsSection({
       return;
     }
 
-    if (role === 'Solo Lectura') {
-      alert(`Acceso denegado: El perfil "${role}" no tiene privilegios para iniciar sincronizaciones bilaterales.`);
+    if (role !== 'Admin') {
+      alert(`Acceso denegado: El perfil con rol "${role}" no tiene privilegios de Administrador para realizar sincronizaciones con Google Sheets. Solo el rol "Admin" puede ejecutar esta acción de forma manual.`);
+      return;
+    }
+
+    // Primera confirmación
+    const confirm1 = window.confirm("¿Está seguro de que desea sincronizar los datos de Google Sheets de forma manual? (Confirmación 1/2)");
+    if (!confirm1) {
+      setLogs((prev) => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'warn',
+        message: 'Sincronización manual cancelada por el usuario en la primera confirmación.'
+      }]);
+      return;
+    }
+
+    // Segunda confirmación
+    const confirm2 = window.confirm("¿Confirma por segunda vez que desea sobreescribir la consistencia de datos de la base de datos distribuida con la información remota de Google Sheets? (Confirmación 2/2)");
+    if (!confirm2) {
+      setLogs((prev) => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'warn',
+        message: 'Sincronización manual cancelada por el usuario en la segunda confirmación.'
+      }]);
       return;
     }
 
@@ -123,7 +145,7 @@ export default function SyncSettingsSection({
     setLogs((prev) => [...prev, {
       timestamp: new Date().toLocaleTimeString(),
       type: 'info',
-      message: 'Comandando transmisión de datos con Google Sheets...'
+      message: 'Comandando transmisión de datos manual con Google Sheets...'
     }]);
 
     const activeToken = overrideToken !== undefined ? overrideToken : token;
@@ -153,13 +175,23 @@ export default function SyncSettingsSection({
           }]);
           return;
         }
+
+        if (role !== 'Admin') {
+          setLogs((prev) => [...prev, {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'error',
+            message: 'Acceso denegado: Se requiere rol de Administrador ("Admin") para la vinculación manual de datos.'
+          }]);
+          return;
+        }
+
         setToken(event.data.token);
         setLogs((prev) => [...prev, {
           timestamp: new Date().toLocaleTimeString(),
           type: 'success',
           message: '¡Conexión autorizada! Token de Acceso OAuth recibido exitosamente de Google.'
         }]);
-        // Trigger automated sync immediately with the newly acquired token
+        // Trigger automated sync immediately with the newly acquired token (will ask for double confirm!)
         handleSyncWithToken(event.data.token);
       }
     };
@@ -174,8 +206,8 @@ export default function SyncSettingsSection({
       return;
     }
 
-    if (role === 'Solo Lectura') {
-      alert(`Acceso denegado: El perfil "${role}" no tiene privilegios para realizar conexiones de datos.`);
+    if (role !== 'Admin') {
+      alert(`Acceso denegado: El perfil con rol "${role}" no tiene privilegios de Administrador para realizar vinculaciones o conexiones de datos. Solo el rol "Admin" puede realizar la vinculación.`);
       return;
     }
 
@@ -213,6 +245,12 @@ export default function SyncSettingsSection({
       alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede ejecutar la sincronización activa con Google Sheets.");
       return;
     }
+
+    if (role !== 'Admin') {
+      alert(`🔒 Acción Restringida: Sincronización manual solo permitida para el rol de Administrador ("Admin").`);
+      return;
+    }
+
     await handleSyncWithToken();
   };
 
@@ -279,7 +317,7 @@ export default function SyncSettingsSection({
           <div className="text-xs space-y-1">
             <p className="font-bold">Sesión Titular de Infraestructura Detectada</p>
             <p className="leading-relaxed font-medium">
-              Bienvenido, <strong className="font-bold text-emerald-900">{currentUserEmail}</strong>. Tienes privilegios administrativos completos para reconfigurar credenciales, sincronizar bases de datos comerciales y reestablecer cachés.
+              Bienvenido, <strong className="font-bold text-emerald-900">{currentUserEmail}</strong>. Tienes privilegios administrativos completos para reconfigurar credenciales, sincronizar bases de datos comerciales de forma manual y reestablecer cachés.
             </p>
           </div>
         </div>
@@ -294,10 +332,10 @@ export default function SyncSettingsSection({
               Credenciales Google Auth Platform
             </h3>
 
-            {role === 'Solo Lectura' && (
+            {role !== 'Admin' && (
               <div className="bg-amber-50 text-amber-800 border border-amber-100 p-2.5 rounded text-xs flex items-center gap-1.5 animate-pulse">
                 <Lock className="w-4 h-4 text-amber-700" />
-                <span>Bloqueo del Rol Activo: Tienes privilegios reducidos. No puedes detonar la sincronización.</span>
+                <span>Bloqueo del Rol Activo: Tu rol es "{role}". Se requiere Rol de Administrador ("Admin") para la sincronización manual de Google Sheets.</span>
               </div>
             )}
 
@@ -323,9 +361,9 @@ export default function SyncSettingsSection({
               <button
                 type="button"
                 onClick={handleOAuthLogin}
-                disabled={role === 'Solo Lectura' || !isInfraAdmin}
+                disabled={role !== 'Admin' || !isInfraAdmin}
                 className={`w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-3 rounded-lg border border-slate-950 transition-all flex justify-center items-center gap-2.5 text-xs shadow-3xs ${
-                  role === 'Solo Lectura' || !isInfraAdmin ? 'opacity-50 cursor-not-allowed bg-slate-400 border-none' : ''
+                  role !== 'Admin' || !isInfraAdmin ? 'opacity-50 cursor-not-allowed bg-slate-400 border-none' : ''
                 }`}
               >
                 <Chrome className="w-4.5 h-4.5 text-blue-400 animate-pulse" />
@@ -407,9 +445,9 @@ export default function SyncSettingsSection({
               <button
                 type="button"
                 onClick={handleSyncNow}
-                disabled={isSyncing || role === 'Solo Lectura' || !isInfraAdmin}
+                disabled={isSyncing || role !== 'Admin' || !isInfraAdmin}
                 className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-all flex justify-center items-center gap-1.5 shadow-3xs ${
-                  isSyncing || role === 'Solo Lectura' || !isInfraAdmin ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''
+                  isSyncing || role !== 'Admin' || !isInfraAdmin ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''
                 }`}
               >
                 {isSyncing ? (
@@ -417,7 +455,7 @@ export default function SyncSettingsSection({
                 ) : (
                   <PlayCircle className="w-4.5 h-4.5" />
                 )}
-                SINCRO HOJAS LIVE COGNITIVA
+                SINCRO HOJAS LIVE COGNITIVA (MANUAL)
               </button>
             </div>
           </div>

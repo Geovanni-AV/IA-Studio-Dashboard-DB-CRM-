@@ -1,4 +1,5 @@
 import { CRMRecord } from './types';
+import { toValidUUID } from './supabaseService';
 
 export interface SyncLog {
   timestamp: string;
@@ -239,8 +240,8 @@ export async function syncFromGoogleSheets(
 
         const rawId = getVal(idIdx);
         let id = rawId;
-        if (!id || seenIds.has(id)) {
-          id = `id-${Math.random().toString(36).substring(2, 9)}`;
+        if (!id || id.trim() === '' || seenIds.has(id)) {
+          id = toValidUUID(`rec-${folio.toUpperCase().trim()}`);
         }
         seenIds.add(id);
 
@@ -259,37 +260,42 @@ export async function syncFromGoogleSheets(
         const tot = hasTot ? getNum(totalIdx) : (sub + iva);
 
         // Smart status detection to handle empty strings or match order presence
-        const rawStatus = getVal(statusIdx).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        const rawStatusStr = getVal(statusIdx);
         const detectedFolioOc = getVal(folioOcIdx);
-        let finalStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' = 'Propuesta';
+        let finalStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null = null;
         
-        if (rawStatus.includes('ganado') || rawStatus.includes('cerrado') || detectedFolioOc !== '') {
+        if (rawStatusStr && rawStatusStr.trim() !== '') {
+          const rawStatus = rawStatusStr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+          if (rawStatus.includes('ganado') || rawStatus.includes('cerrado') || detectedFolioOc !== '') {
+            finalStatus = 'Cerrado Ganado';
+          } else if (rawStatus.includes('negociacion') || rawStatus.includes('negotiation') || rawStatus.includes('proceso')) {
+            finalStatus = 'Negociación';
+          } else if (rawStatus.includes('propuesta') || rawStatus.includes('proposal')) {
+            finalStatus = 'Propuesta';
+          }
+        } else if (detectedFolioOc !== '') {
           finalStatus = 'Cerrado Ganado';
-        } else if (rawStatus.includes('negociacion') || rawStatus.includes('negotiation') || rawStatus.includes('proceso')) {
-          finalStatus = 'Negociación';
-        } else {
-          finalStatus = 'Propuesta';
         }
 
-        let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' = 'Warm';
+        let finalStatusNivel: 'Win' | 'Hot' | 'Warm' | 'Cool' | null = null;
         if (finalStatus === 'Cerrado Ganado') {
           finalStatusNivel = 'Win';
         } else if (finalStatus === 'Negociación') {
           finalStatusNivel = 'Hot';
-        } else {
+        } else if (finalStatus === 'Propuesta') {
           finalStatusNivel = 'Cool';
         }
 
         parsedRecords.push({
           id,
-          informacion_general_folio: folio,
-          fecha_registro: getVal(fechaIdx) || new Date().toISOString().split('T')[0],
-          informacion_general_cliente: getVal(clienteIdx) || 'Otro',
-          informacion_general_planta: getVal(plantaIdx) || 'Sin Planta',
-          cliente_pais: getVal(paisIdx) || 'México',
-          cliente_ubicacion: getVal(ubicacionIdx) || 'N/A',
-          informacion_general_proyecto: getVal(proyectoIdx) || 'Proyecto Sincronizado',
-          informacion_general_link_cotizacion: getVal(linkCotizacionIdx) || '',
+          informacion_general_folio: folio || null,
+          fecha_registro: getVal(fechaIdx) || null,
+          informacion_general_cliente: getVal(clienteIdx) || null,
+          informacion_general_planta: getVal(plantaIdx) || null,
+          cliente_pais: getVal(paisIdx) || null,
+          cliente_ubicacion: getVal(ubicacionIdx) || null,
+          informacion_general_proyecto: getVal(proyectoIdx) || null,
+          informacion_general_link_cotizacion: getVal(linkCotizacionIdx) || null,
           total_hardware_cotizacion: hw,
           total_servicios_cotizacion: sv,
           total_subtotal_cotizacion: sub,
@@ -298,9 +304,9 @@ export async function syncFromGoogleSheets(
           informacion_general_moneda: (getVal(monedaIdx).toUpperCase() === 'USD' ? 'USD' : 'MXN') as 'USD' | 'MXN',
           estado_proyecto: finalStatus,
           status_proyecto: finalStatusNivel,
-          folio_orden_compra: detectedFolioOc || undefined,
-          link_orden_compra: getVal(linkOcIdx) || undefined,
-          notas_comerciales: getVal(notasIdx) || '',
+          folio_orden_compra: detectedFolioOc || null,
+          link_orden_compra: getVal(linkOcIdx) || null,
+          notas_comerciales: getVal(notasIdx) || null,
           acciones_seguimiento: []
         });
       });

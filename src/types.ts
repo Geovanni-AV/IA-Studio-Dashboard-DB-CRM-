@@ -10,35 +10,35 @@ export interface FollowupEntry {
 
 export interface CRMRecord {
   id: string;
-  informacion_general_folio: string; // e.g. "VT-1553"
-  fecha_registro: string; // YYYY-MM-DD
-  informacion_general_cliente: string; // Grupo Bimbo, AstraZeneca, UNAM, etc.
-  informacion_general_planta: string; // Planta Toluca, Planta Monterrey, etc.
-  cliente_pais: string; // México, EE.UU., LATAM
-  cliente_ubicacion: string; // Specific city/state (e.g. CDMX, Monterrey, New York)
-  informacion_general_proyecto: string; // e.g., "Medición de Flujo Vapor"
-  informacion_general_link_cotizacion: string; // Google Drive PDF link
+  informacion_general_folio: string | null; // e.g. "VT-1553"
+  fecha_registro: string | null; // YYYY-MM-DD
+  informacion_general_cliente: string | null; // Grupo Bimbo, AstraZeneca, UNAM, etc.
+  informacion_general_planta: string | null; // Planta Toluca, Planta Monterrey, etc.
+  cliente_pais: string | null; // México, EE.UU., LATAM
+  cliente_ubicacion: string | null; // Specific city/state (e.g. CDMX, Monterrey, New York)
+  informacion_general_proyecto: string | null; // e.g., "Medición de Flujo Vapor"
+  informacion_general_link_cotizacion: string | null; // Google Drive PDF link
   total_hardware_cotizacion: number; // Supplies
   total_servicios_cotizacion: number; // Support/Installation SERVICES
   total_subtotal_cotizacion: number; // Hardware + Services
   total_iva_cotizacion: number; // 16% of Subtotal
   total_general_cotizacion: number; // Subtotal + IVA
   informacion_general_moneda: 'USD' | 'MXN'; // Contract default currency
-  estado_proyecto: 'Propuesta' | 'Negociación' | 'Cerrado Ganado'; // Column 6
-  status_proyecto: 'Win' | 'Hot' | 'Warm' | 'Cool'; // Column 7
+  estado_proyecto?: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null; // Column 6
+  status_proyecto?: 'Win' | 'Hot' | 'Warm' | 'Cool' | null; // Column 7
   
   // Purchase Order Details (for Cerrado Ganado)
-  folio_orden_compra?: string;
-  link_orden_compra?: string;
-  fecha_inicio_proyecto?: string; // YYYY-MM-DD
+  folio_orden_compra?: string | null;
+  link_orden_compra?: string | null;
+  fecha_inicio_proyecto?: string | null; // YYYY-MM-DD
   informacion_general_instalacion_incluida?: boolean;
   
-  notas_comerciales: string;
+  notas_comerciales: string | null;
   acciones_seguimiento: FollowupEntry[];
   
   // Custom tracking for Obsolete or substituted ref
-  sustituye_folio_anterior?: string; // Trazabilidad
-  prioridad_nivel?: 'Win' | 'Hot' | 'Warm' | 'Cool';
+  sustituye_folio_anterior?: string | null; // Trazabilidad
+  prioridad_nivel?: 'Win' | 'Hot' | 'Warm' | 'Cool' | null;
 }
 
 export interface AuditLog {

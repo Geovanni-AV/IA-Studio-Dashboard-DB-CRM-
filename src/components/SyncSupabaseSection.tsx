@@ -8,7 +8,8 @@ import {
   SUPABASE_SQL_INSTRUCTIONS,
   getResolvedCRMTableName,
   getResolvedContactsTableName,
-  getResolvedAuditLogsTableName
+  getResolvedAuditLogsTableName,
+  deleteCRMRecordsFromSupabase
 } from '../supabaseService';
 import { 
   Database,
@@ -150,6 +151,108 @@ export default function SyncSupabaseSection({
   const [tablesStatus, setTablesStatus] = useState({ records: false, contacts: false, logs: false });
   const [rawConnectionError, setRawConnectionError] = useState<any>(null);
   const [copiedError, setCopiedError] = useState(false);
+
+  // Duplicate records check states
+  const [showCleanupModal, setShowCleanupModal] = useState(false);
+  const [duplicateList, setDuplicateList] = useState<CRMRecord[]>([]);
+  const [cleanRecordsList, setCleanRecordsList] = useState<CRMRecord[]>([]);
+  const [isCleaning, setIsCleaning] = useState(false);
+
+  const handleInspectDuplicates = () => {
+    // Group records by 'informacion_general_folio'
+    const groups: Record<string, CRMRecord[]> = {};
+    records.forEach((rec) => {
+      const folio = rec.informacion_general_folio ? rec.informacion_general_folio.trim() : 'S/F';
+      if (!groups[folio]) {
+        groups[folio] = [];
+      }
+      groups[folio].push(rec);
+    });
+
+    const keep: CRMRecord[] = [];
+    const dupes: CRMRecord[] = [];
+
+    Object.entries(groups).forEach(([folio, group]) => {
+      if (group.length <= 1) {
+        keep.push(...group);
+      } else {
+        // Sort: latest fecha_registro first (newest kept canonical). If same, sort by ID
+        const sorted = [...group].sort((a, b) => {
+          const dateA = a.fecha_registro || '';
+          const dateB = b.fecha_registro || '';
+          if (dateA !== dateB) {
+            return dateB.localeCompare(dateA); // Newest first
+          }
+          return (b.id || '').localeCompare(a.id || '');
+        });
+
+        // The first one is canonical
+        keep.push(sorted[0]);
+        // Rest are duplicates
+        dupes.push(...sorted.slice(1));
+      }
+    });
+
+    setDuplicateList(dupes);
+    setCleanRecordsList(keep);
+
+    if (dupes.length === 0) {
+      addLog('Escaneo de base de datos finalizado. No se encontraron registros duplicados de la columna informacion_general_folio.', 'success');
+      alert('🔍 Diagnóstico Completado:\n\nNo se encontraron registros duplicados de la columna "informacion_general_folio" en la tabla DB CRM.');
+      return;
+    }
+
+    setShowCleanupModal(true);
+  };
+
+  const handleExecuteCleanup = async () => {
+    if (duplicateList.length === 0) {
+      setShowCleanupModal(false);
+      return;
+    }
+
+    setIsCleaning(true);
+    addLog(`Iniciando depuración de ${duplicateList.length} registros duplicados de la tabla central de expedientes...`, 'info');
+
+    try {
+      let supabaseSuccess = true;
+      let errorDetail = '';
+
+      // If Supabase is connected, delete from table in batch
+      const hasSupabaseConfig = supabaseUrl && supabaseKey;
+      if (hasSupabaseConfig && connStatus === 'CONNECTED') {
+        addLog(`Eliminando ${duplicateList.length} registros de forma remota en Supabase...`, 'info');
+        const idsToDelete = duplicateList.map(d => d.id);
+        const success = await deleteCRMRecordsFromSupabase(supabaseUrl, supabaseKey, idsToDelete);
+        if (!success) {
+          supabaseSuccess = false;
+          errorDetail = 'Error al ejecutar query DELETE en la base de datos de Supabase.';
+        }
+      } else if (hasSupabaseConfig) {
+        addLog('Aviso: Supabase está configurado pero no se detectó conexión exitosa. Se procede solo a depuración local.', 'warn');
+      }
+
+      if (supabaseSuccess) {
+        // Update local React state elements (parent state update trigger)
+        onSyncComplete(cleanRecordsList, contacts, auditLogs);
+        
+        // Audit telemetry insertion
+        onShowAudit('DEPURACIÓN DUPLICADOS', `Eliminó con éxito ${duplicateList.length} registros duplicados redundantes de la columna de folios.`);
+        addLog(`Depuración completada con éxito. Se eliminaron ${duplicateList.length} registros duplicados de folios de forma ${hasSupabaseConfig && connStatus === 'CONNECTED' ? 'local y remota' : 'local'}.`, 'success');
+        
+        alert(`¡Depuración exitosa!\n\nSe eliminaron correctamente ${duplicateList.length} registros duplicados de la columna "informacion_general_folio". El estado de la base de datos distribuida se encuentra perfectamente sincronizado.`);
+      } else {
+        addLog(`La depuración remota de Supabase falló: ${errorDetail}. Sincronización local abortada para conservar coherencia entre nodos.`, 'error');
+        alert(`Error en depuración de base de datos remota: ${errorDetail}`);
+      }
+    } catch (err: any) {
+      addLog(`Error fatal durante la depuración de duplicados: ${err.message}`, 'error');
+      alert(`Ocurrió un error inesperado al eliminar registros redundantes: ${err.message}`);
+    } finally {
+      setIsCleaning(false);
+      setShowCleanupModal(false);
+    }
+  };
 
   // Sync logs array state back to storage
   useEffect(() => {
@@ -581,6 +684,43 @@ export default function SyncSupabaseSection({
               </button>
             </div>
           </div>
+
+          {/* HERRAMIENTA DE DEPURACIÓN DE REGISTROS DUPLICADOS (Rol Admin único) */}
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm space-y-4">
+            <h3 className="font-title-sm text-base font-semibold text-[#0b1c30] flex items-center gap-2 border-b border-slate-100 pb-2">
+              <ShieldCheck className="text-amber-600 w-4.5 h-4.5" />
+              Mantenimiento & Depuración de Duplicados
+            </h3>
+            
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Esta sección de auditoría avanzada escanea la base de datos comercial para identificar registros redundantes en base al <code className="font-mono bg-slate-100 px-1 py-0.5 rounded text-slate-800">informacion_general_folio</code> de la tabla DB CRM. Al depurar, mantendremos el registro más reciente y purgaremos las copias redundantes.
+            </p>
+
+            {role !== 'Admin' ? (
+              <div className="bg-amber-50 text-amber-900 border border-amber-100 p-3 rounded-lg text-xs flex items-center gap-2 font-medium leading-relaxed">
+                <Lock className="w-4.5 h-4.5 text-amber-600 shrink-0" />
+                <span>Bloqueo del Rol Activo: Tu perfil es "{role}". Solo los usuarios con rol de Administrador ("Admin") tienen privilegios para depurar duplicados de folios.</span>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-emerald-50 text-emerald-950 p-3 rounded-lg text-xs flex items-start gap-2 border border-emerald-150 font-medium leading-relaxed">
+                  <CheckCircle className="w-4.5 h-4.5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Acceso Permitido:</span> Tienes credenciales de Administrador para analizar y purgar la consistencia de folios.
+                  </div>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={handleInspectDuplicates}
+                  className="w-full bg-[#d97706] hover:bg-[#b45309] text-white font-bold py-2.5 rounded-lg transition-all flex justify-center items-center gap-2 text-xs shadow-sm cursor-pointer border border-[#c2410c]"
+                >
+                  <AlertTriangle className="w-4.5 h-4.5 text-amber-200 animate-pulse" />
+                  ANALIZAR Y ELIMINAR DUPLICADOS
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Process Logs Terminal & SQL Instructions */}
@@ -657,6 +797,110 @@ export default function SyncSupabaseSection({
 
         </div>
       </div>
+
+      {/* MODAL DE CONFIRMACIÓN Y RESUMEN DE DEPURACIÓN (VENTANA EMERGENTE COGNITIVA) */}
+      {showCleanupModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden transform transition-all animate-scale-up">
+            
+            {/* Header del modal */}
+            <div className="bg-[#0b1c30] text-white px-5 py-4 flex items-center justify-between border-b border-[#1e2d3e]">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="text-amber-400 w-5 h-5 animate-pulse" />
+                <span className="font-title-sm text-base font-bold tracking-tight">
+                  Resumen de Duplicados Detectados
+                </span>
+              </div>
+              <button
+                onClick={() => setShowCleanupModal(false)}
+                className="text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase underline"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {/* Contenido principal del modal */}
+            <div className="p-5 space-y-4 text-left">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-xs text-amber-950 flex gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold">¡Atención! Acción de depuración irreversible.</p>
+                  <p className="leading-relaxed">
+                    Se detectaron <strong className="font-extrabold text-amber-900">{duplicateList.length} registros duplicados</strong> (copias antiguas que comparten el mismo folio en la base de datos). El algoritmo seleccionó la versión más reciente de cada folio para mantenerla activa y purgará el resto.
+                  </p>
+                </div>
+              </div>
+
+              {/* Detalle visual de folios e identificadores duplicados */}
+              <div className="space-y-2">
+                <p className="text-xs uppercase font-bold tracking-wider text-slate-500 font-mono">
+                  Registros que se van a eliminar ({duplicateList.length})
+                </p>
+                <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-3 text-xs divide-y divide-slate-100 scrollbar-thin">
+                  {duplicateList.map((rec, idx) => {
+                    return (
+                      <div key={rec.id} className="py-2 flex justify-between items-center bg-transparent">
+                        <div className="space-y-0.5">
+                          <p className="font-mono text-slate-900 font-semibold text-[11px]">
+                            {idx + 1}. Folio No: <span className="bg-amber-100 px-1 py-0.2 rounded text-amber-900 font-bold">{rec.informacion_general_folio}</span>
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-sans leading-tight">
+                            Cliente: <strong className="text-slate-700">{rec.informacion_general_cliente}</strong> | Proyecto: {rec.informacion_general_proyecto}
+                          </p>
+                        </div>
+                        <div className="text-right space-y-0.5">
+                          <span className="font-mono text-[9px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
+                            {rec.fecha_registro}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Indicador de conexión / afectación de Supabase */}
+              {supabaseUrl && supabaseKey && connStatus === 'CONNECTED' ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-sm p-3 text-[11px] text-blue-900 flex items-center gap-2">
+                  <Database className="w-4.5 h-4.5 text-blue-600 shrink-0" />
+                  <span>
+                    <strong>Puente Supabase Activado:</strong> Los {duplicateList.length} duplicados también serán eliminados de la base de datos remota de Supabase <strong className="font-mono">{getResolvedCRMTableName()}</strong>.
+                  </span>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-sm p-3 text-[11px] text-slate-600 flex items-center gap-2">
+                  <Database className="w-4.5 h-4.5 text-slate-400 shrink-0" />
+                  <span>
+                    La depuración solo se aplicará al almacenamiento local (o Supabase no tiene comunicación activa en este momento).
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Footer con controles finales */}
+            <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex justify-end gap-3.5">
+              <button
+                type="button"
+                onClick={() => setShowCleanupModal(false)}
+                className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-medium py-2 px-4 rounded-lg text-xs transition"
+              >
+                CANCELAR
+              </button>
+              
+              <button
+                type="button"
+                disabled={isCleaning}
+                onClick={handleExecuteCleanup}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition flex items-center gap-2 shadow-xs cursor-pointer border border-red-700 disabled:opacity-50"
+              >
+                {isCleaning ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                CONFIRMAR Y PURGAR ({duplicateList.length})
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }
