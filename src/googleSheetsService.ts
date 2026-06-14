@@ -1,5 +1,6 @@
 import { CRMRecord } from './types';
 import { toValidUUID } from './supabaseService';
+import { getMexicoCityTimeString } from './dateUtils';
 
 export interface SyncLog {
   timestamp: string;
@@ -25,7 +26,7 @@ export async function syncFromGoogleSheets(
   const logs: SyncLog[] = [];
   const addLog = (message: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     logs.push({
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: getMexicoCityTimeString(),
       type,
       message
     });
@@ -337,7 +338,7 @@ export async function pushToGoogleSheets(
   const logs: SyncLog[] = [];
   const addLog = (message: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     logs.push({
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: getMexicoCityTimeString(),
       type,
       message
     });

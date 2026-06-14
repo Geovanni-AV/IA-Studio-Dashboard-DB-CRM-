@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole, CRMRecord, Contact, AuditLog } from '../types';
+import { getMexicoCityTimeString } from '../dateUtils';
 import { 
   getSupabaseClient,
   testSupabaseConnection,
@@ -141,7 +142,7 @@ export default function SyncSupabaseSection({
       }
     }
     return [
-      { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Módulo de persistencia Supabase inicializado.' }
+      { timestamp: getMexicoCityTimeString(), type: 'info', message: 'Módulo de persistencia Supabase inicializado.' }
     ];
   });
   const [isTestLoading, setIsTestLoading] = useState(false);
@@ -271,7 +272,7 @@ export default function SyncSupabaseSection({
 
   const addLog = (message: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
     setLogs((prev) => [...prev, {
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: getMexicoCityTimeString(),
       type,
       message
     }]);
@@ -312,10 +313,12 @@ export default function SyncSupabaseSection({
         } else {
           setConnStatus('PARTIAL');
           addLog('Conexión establecida pero faltan tablas. Ejecute el script SQL provisto.', 'warn');
+          onShowAudit('ANOMALÍA', `Conexión establecida con Supabase pero con estado parcial o tablas ausentes.`);
         }
       } else {
         setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        onShowAudit('ERROR', `Fallo de conexión a Supabase: ${result.message}`);
         if (result.rawError) {
           setRawConnectionError(result.rawError);
           addLog(`DETALLE DEL ERROR (copiar esto): ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
@@ -325,6 +328,7 @@ export default function SyncSupabaseSection({
     } catch (err: any) {
       setConnStatus('DISCONNECTED');
       addLog(`Error de red o detalles: ${err.message}`, 'error');
+      onShowAudit('ERROR', `Error crítico de red en puente de Supabase: ${err.message}`);
     } finally {
       setIsTestLoading(false);
     }
@@ -385,6 +389,7 @@ export default function SyncSupabaseSection({
       } else {
         setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        onShowAudit('ERROR', `Fallo al importar de la base de datos Supabase: ${result.message}`);
         if (result.rawError) {
           setRawConnectionError(result.rawError);
           addLog(`DETALLE DEL ERROR: ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
@@ -397,6 +402,7 @@ export default function SyncSupabaseSection({
       setConnStatus('DISCONNECTED');
       setRawConnectionError(err);
       addLog(`Error en importación de bajada: ${err.message}`, 'error');
+      onShowAudit('ERROR', `Error crítico al descargar de Supabase: ${err.message}`);
     } finally {
       setIsPullLoading(false);
     }
@@ -435,6 +441,7 @@ export default function SyncSupabaseSection({
       } else {
         setConnStatus('DISCONNECTED');
         addLog(result.message, 'error');
+        onShowAudit('ERROR', `Fallo al exportar base de datos a Supabase: ${result.message}`);
         if (result.rawError) {
           setRawConnectionError(result.rawError);
           addLog(`DETALLE DEL ERROR: ${JSON.stringify(result.rawError, Object.getOwnPropertyNames(result.rawError), 2)}`, 'error');
@@ -447,6 +454,7 @@ export default function SyncSupabaseSection({
       setConnStatus('DISCONNECTED');
       setRawConnectionError(err);
       addLog(`Error en exportación masiva: ${err.message}`, 'error');
+      onShowAudit('ERROR', `Error crítico al subir a Supabase: ${err.message}`);
     } finally {
       setIsPushLoading(false);
     }
@@ -786,7 +794,7 @@ export default function SyncSupabaseSection({
               <span className="uppercase text-slate-400">Sincronización: {autoSync ? 'Automática Activa' : 'Manual'}</span>
               <button
                 onClick={() => setLogs([
-                  { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Consola técnica limpia.' }
+                  { timestamp: getMexicoCityTimeString(), type: 'info', message: 'Consola técnica limpia.' }
                 ])}
                 className="hover:text-white font-bold uppercase underline outline-none"
               >

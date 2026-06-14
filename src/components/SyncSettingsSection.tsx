@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole, CRMRecord } from '../types';
+import { getMexicoCityTimeString } from '../dateUtils';
 import { syncFromGoogleSheets, SyncLog } from '../googleSheetsService';
 import { 
   Database, 
@@ -103,8 +104,8 @@ export default function SyncSettingsSection({
 
   // Process Logs
   const [logs, setLogs] = useState<SyncLog[]>([
-    { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Sistema de sincronización de Google Sheets inicializado.' },
-    { timestamp: new Date().toLocaleTimeString(), type: 'success', message: 'Configuración de OAuth predefinida con Google Auth Platform.' }
+    { timestamp: getMexicoCityTimeString(), type: 'info', message: 'Sistema de sincronización de Google Sheets inicializado.' },
+    { timestamp: getMexicoCityTimeString(), type: 'success', message: 'Configuración de OAuth predefinida con Google Auth Platform.' }
   ]);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -123,7 +124,7 @@ export default function SyncSettingsSection({
     const confirm1 = window.confirm("¿Está seguro de que desea sincronizar los datos de Google Sheets de forma manual? (Confirmación 1/2)");
     if (!confirm1) {
       setLogs((prev) => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: getMexicoCityTimeString(),
         type: 'warn',
         message: 'Sincronización manual cancelada por el usuario en la primera confirmación.'
       }]);
@@ -134,7 +135,7 @@ export default function SyncSettingsSection({
     const confirm2 = window.confirm("¿Confirma por segunda vez que desea sobreescribir la consistencia de datos de la base de datos distribuida con la información remota de Google Sheets? (Confirmación 2/2)");
     if (!confirm2) {
       setLogs((prev) => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: getMexicoCityTimeString(),
         type: 'warn',
         message: 'Sincronización manual cancelada por el usuario en la segunda confirmación.'
       }]);
@@ -143,7 +144,7 @@ export default function SyncSettingsSection({
 
     setIsSyncing(true);
     setLogs((prev) => [...prev, {
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: getMexicoCityTimeString(),
       type: 'info',
       message: 'Comandando transmisión de datos manual con Google Sheets...'
     }]);
@@ -157,6 +158,8 @@ export default function SyncSettingsSection({
     if (result.success) {
       onSyncComplete(result.logs, result.records);
       onShowAudit('CONEXIÓN HOJA', `Sincronizó exitosamente base de datos con Google Sheets URL: ${sheetUrl.substring(0, 45)}...`);
+    } else {
+      onShowAudit('ERROR', `Fallo de sincronización manual con Google Sheets.`);
     }
   };
 
@@ -169,25 +172,27 @@ export default function SyncSettingsSection({
       if (event.data?.type === 'GOOGLE_SHEETS_TOKEN' && event.data?.token) {
         if (!isInfraAdmin) {
           setLogs((prev) => [...prev, {
-            timestamp: new Date().toLocaleTimeString(),
+            timestamp: getMexicoCityTimeString(),
             type: 'error',
             message: 'Intento de vinculación web bloqueado: Token recibido pero el usuario activo no es el administrador de infraestructura.'
           }]);
+          onShowAudit('ANOMALÍA', 'Intento desactivado de vincular token OAuth de Google Sheets sin ser administrador de infraestructura.');
           return;
         }
 
         if (role !== 'Admin') {
           setLogs((prev) => [...prev, {
-            timestamp: new Date().toLocaleTimeString(),
+            timestamp: getMexicoCityTimeString(),
             type: 'error',
             message: 'Acceso denegado: Se requiere rol de Administrador ("Admin") para la vinculación manual de datos.'
           }]);
+          onShowAudit('ANOMALÍA', 'Intento desactivado de vincular token OAuth de Google Sheets con rol insuficiente.');
           return;
         }
 
         setToken(event.data.token);
         setLogs((prev) => [...prev, {
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: getMexicoCityTimeString(),
           type: 'success',
           message: '¡Conexión autorizada! Token de Acceso OAuth recibido exitosamente de Google.'
         }]);
@@ -233,7 +238,7 @@ export default function SyncSettingsSection({
       alert('El navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes para este portal para completar el consentimiento de Google.');
     } else {
       setLogs((prev) => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: getMexicoCityTimeString(),
         type: 'info',
         message: 'Portal de consentimiento abierto. Esperando autorización segura del usuario en Google...'
       }]);
@@ -270,7 +275,7 @@ export default function SyncSettingsSection({
       onShowAudit('RESTABLECIMIENTO', 'Reestableció la base de datos local a valores estándar de prueba.');
       
       setLogs((prev) => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: getMexicoCityTimeString(),
         type: 'success',
         message: 'Base de datos de persistencia local revertida de manera segura al estado estándar (Grupo Bimbo, AstraZeneca, UNAM).'
       }]);
@@ -675,7 +680,7 @@ export default function SyncSettingsSection({
               <span>ESTADO CONEXIÓN: {token ? 'AUTORIZADO (LIVE)' : 'LISTO'}</span>
               <button
                 onClick={() => setLogs([
-                  { timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Consola técnica limpia.' }
+                  { timestamp: getMexicoCityTimeString(), type: 'info', message: 'Consola técnica limpia.' }
                 ])}
                 className="hover:text-white font-bold tracking-wider uppercase underline outline-none font-mono"
               >

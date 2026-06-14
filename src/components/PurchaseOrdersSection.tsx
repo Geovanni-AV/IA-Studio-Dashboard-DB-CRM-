@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { CRMRecord, UserRole } from '../types';
+import { getMexicoCityDateString } from '../dateUtils';
 import { FileCheck, BookOpen, AlertCircle, Trash, Lock, FileSpreadsheet, Plus, ExternalLink, Calendar } from 'lucide-react';
 
 interface PurchaseOrdersSectionProps {
@@ -55,7 +56,7 @@ export default function PurchaseOrdersSection({
       status_proyecto: 'Win',
       folio_orden_compra: folioOC,
       link_orden_compra: linkOC || 'https://drive.google.com/open?id=standard_po_placeholder',
-      fecha_inicio_proyecto: fechaInicio || new Date().toISOString().split('T')[0],
+      fecha_inicio_proyecto: fechaInicio || getMexicoCityDateString(),
       informacion_general_instalacion_incluida: instalacionIncluida
     };
 

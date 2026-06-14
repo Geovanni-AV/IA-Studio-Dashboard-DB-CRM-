@@ -55,7 +55,7 @@ export default function ContactsSection({
     };
 
     onAddContact(nContact);
-    onShowAudit('ALTA REGISTRO', `Registró nuevo contacto técnico: ${name} de ${cliente}`);
+    onShowAudit('ALTA REGISTRO', `Registró nuevo contacto técnico: ${name} en ${cliente} (${planta || 'Sin especificar'}). Puesto: "${puesto}", Correo: ${email}, Teléfono: ${telefono || 'N/A'}, Link Comercial: ${isCommercial ? 'SÍ' : 'NO'}`);
 
     // Reset
     setName('');
@@ -74,9 +74,11 @@ export default function ContactsSection({
       alert(`🔒 Acción restringida: Solo el rol de Administrador puede remover ingenieros del directorio central.`);
       return;
     }
+    const targetContact = contacts.find(c => c.id === id);
+    const companyInfo = targetContact ? ` de la empresa ${targetContact.cliente}` : '';
     if (window.confirm(`¿Está seguro de que desea eliminar el contacto "${contactName}" del directorio?`)) {
       onDeleteContact(id);
-      onShowAudit('ELIMINACIÓN', `Removió contacto técnico "${contactName}" del directorio`);
+      onShowAudit('ELIMINACIÓN', `Removió contacto técnico "${contactName}"${companyInfo} del directorio`);
     }
   };
 

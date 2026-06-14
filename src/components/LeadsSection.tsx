@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CRMRecord, UserRole, FollowupEntry } from '../types';
+import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID } from '../supabaseService';
 import { 
   Search, 
@@ -175,8 +176,12 @@ export default function LeadsSection({
 
   const handleConfirmDeleteActual = () => {
     if (recordToDelete) {
+      const fullRecord = records.find(r => r.id === recordToDelete.id);
+      const extraInfo = fullRecord 
+        ? ` (${fullRecord.informacion_general_cliente || 'N/A'} - ${fullRecord.informacion_general_proyecto || 'N/A'})` 
+        : '';
       onDeleteRecord(recordToDelete.id);
-      onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${recordToDelete.folio}`);
+      onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${recordToDelete.folio}${extraInfo} permanentemente.`);
       setDeleteConfirmOpen(false);
       setRecordToDelete(null);
     }
@@ -214,7 +219,7 @@ export default function LeadsSection({
     const payload: CRMRecord = {
       id: formId || toValidUUID(`rec-${formFolio.toUpperCase().trim()}`),
       informacion_general_folio: formFolio || null,
-      fecha_registro: existingRec?.fecha_registro || new Date().toISOString().split('T')[0],
+      fecha_registro: existingRec?.fecha_registro || getMexicoCityDateString(),
       informacion_general_cliente: formCliente || null,
       informacion_general_planta: formPlanta || null,
       cliente_pais: formPais || null,
@@ -242,10 +247,52 @@ export default function LeadsSection({
 
     if (isEditing) {
       onUpdateRecord(payload);
-      onShowAudit('MODIFICACIÓN', `Actualizó expediente comercial de ${formCliente} (Folio ${formFolio})`);
+      const changes: string[] = [];
+      if (existingRec) {
+        if (existingRec.informacion_general_cliente !== payload.informacion_general_cliente) {
+          changes.push(`Cliente: "${existingRec.informacion_general_cliente || 'Sin asignar'}" ➔ "${payload.informacion_general_cliente || 'Sin asignar'}"`);
+        }
+        if (existingRec.informacion_general_planta !== payload.informacion_general_planta) {
+          changes.push(`Planta: "${existingRec.informacion_general_planta || 'Sin asignar'}" ➔ "${payload.informacion_general_planta || 'Sin asignar'}"`);
+        }
+        if (existingRec.informacion_general_proyecto !== payload.informacion_general_proyecto) {
+          changes.push(`Proyecto: "${existingRec.informacion_general_proyecto || 'Sin asignar'}" ➔ "${payload.informacion_general_proyecto || 'Sin asignar'}"`);
+        }
+        if (existingRec.cliente_pais !== payload.cliente_pais) {
+          changes.push(`País: "${existingRec.cliente_pais || 'Sin asignar'}" ➔ "${payload.cliente_pais || 'Sin asignar'}"`);
+        }
+        if (existingRec.cliente_ubicacion !== payload.cliente_ubicacion) {
+          changes.push(`Ubicación: "${existingRec.cliente_ubicacion || 'Sin asignar'}" ➔ "${payload.cliente_ubicacion || 'Sin asignar'}"`);
+        }
+        if (existingRec.total_hardware_cotizacion !== payload.total_hardware_cotizacion) {
+          changes.push(`Hardware: $${existingRec.total_hardware_cotizacion} ➔ $${payload.total_hardware_cotizacion}`);
+        }
+        if (existingRec.total_servicios_cotizacion !== payload.total_servicios_cotizacion) {
+          changes.push(`Servicios: $${existingRec.total_servicios_cotizacion} ➔ $${payload.total_servicios_cotizacion}`);
+        }
+        if (existingRec.informacion_general_moneda !== payload.informacion_general_moneda) {
+          changes.push(`Moneda: ${existingRec.informacion_general_moneda} ➔ ${payload.informacion_general_moneda}`);
+        }
+        if (existingRec.estado_proyecto !== payload.estado_proyecto) {
+          changes.push(`Estado: "${existingRec.estado_proyecto || 'Sin asignar'}" ➔ "${payload.estado_proyecto || 'Sin asignar'}"`);
+        }
+        if (existingRec.sustituye_folio_anterior !== payload.sustituye_folio_anterior) {
+          changes.push(`Sustituye Folio: "${existingRec.sustituye_folio_anterior || 'Sin asignar'}" ➔ "${payload.sustituye_folio_anterior || 'Sin asignar'}"`);
+        }
+        if (existingRec.informacion_general_link_cotizacion !== payload.informacion_general_link_cotizacion) {
+          changes.push(`Link de cotización actualizado`);
+        }
+        if (existingRec.notas_comerciales !== payload.notas_comerciales) {
+          changes.push(`Notas comerciales actualizadas`);
+        }
+      }
+      const descCambios = changes.length > 0 
+        ? `, Cambios: [${changes.join(' | ')}]`
+        : ' (Sin cambios significativos)';
+      onShowAudit('MODIFICACIÓN', `Actualizó expediente comercial de ${formCliente} (Folio ${formFolio})${descCambios}`);
     } else {
       onAddRecord(payload);
-      onShowAudit('ALTA REGISTRO', `Creó nueva oferta para ${formCliente} con folio asignado ${formFolio}`);
+      onShowAudit('ALTA REGISTRO', `Creó nueva oferta para ${formCliente} (Folio ${formFolio}). Detalle inicial: Proyecto: "${formProyecto}", Planta: "${formPlanta}", Ubicación: "${formUbicacion || 'Sin especificar'}", Monto: $${total} ${formMoneda}, Estado: "${formStatus || 'Sin especificar'}"`);
     }
 
     setIsFormOpen(false);
@@ -1987,7 +2034,7 @@ function AccionesSeguimientoCell({
         
         const newEntry: FollowupEntry = {
           id: `fl_${Date.now()}`,
-          fecha: new Date().toISOString().substring(0, 16).replace('T', ' '),
+          fecha: getMexicoCityDateTimeShortString(),
           tipo: 'Llamada Telefónica',
           creador: creatorName,
           notas: trimmed

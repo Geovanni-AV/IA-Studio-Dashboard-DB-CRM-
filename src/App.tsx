@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { CRMRecord, Contact, AuditLog, UserRole } from './types';
 import { INITIAL_RECORDS, INITIAL_CONTACTS, INITIAL_AUDIT_LOGS } from './mockData';
 import { pushToGoogleSheets } from './googleSheetsService';
+import { getMexicoCityDateTimeString, getMexicoCityTimeString } from './dateUtils';
 import SyncSupabaseSection from './components/SyncSupabaseSection';
 import { 
   pushCRMRecordToSupabase, 
@@ -43,11 +45,26 @@ import {
   Globe,
   Plus,
   Database,
-  User
+  User,
+  ChevronLeft,
+  ChevronRight,
+  Menu
 } from 'lucide-react';
 
 export default function App() {
   // --- Persistent States ---
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('verse_sidebar_collapsed') === 'true';
+  });
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('verse_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
+
   const [records, setRecords] = useState<CRMRecord[]>(() => {
     const local = localStorage.getItem('verse_crm_records');
     return local ? JSON.parse(local) : INITIAL_RECORDS;
@@ -89,6 +106,7 @@ export default function App() {
     setGoogleUser(profile);
     localStorage.setItem('verse_google_user', JSON.stringify(profile));
     showToast(`¡Bienvenido, ${profile.name}! Sesión iniciada.`, 'success');
+    appendAuditLog('INICIO SESIÓN', `Usuario inició sesión exitosamente utilizando dirección: ${email}`, email);
   };
 
   // States for loaders and feedback notifications
@@ -118,15 +136,21 @@ export default function App() {
         setIsAuthenticated(true);
         localStorage.setItem('verse_is_logged_in', 'true');
         showToast(`¡Conexión Google Exitosa! Bienvenido, ${profile.name}`, 'success');
+        appendAuditLog('INICIO SESIÓN', `Usuario inició sesión de forma segura a través de Google Workspace OAuth (${profile.name}).`, profile.email);
       } else {
         console.warn('Token inválido o expirado en el API de Google.');
+        appendAuditLog('ERROR', 'Intento de inicio de sesión de Google falló por token inválido o expirado.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching Google profile:', e);
+      appendAuditLog('ERROR', `Error al consultar perfil de Google en inicio de sesión: ${e.message || e}`);
     }
   };
 
   const handleDisconnectGoogle = () => {
+    if (googleUser?.email) {
+      appendAuditLog('CERRAR SESIÓN', `Usuario cerró sesión y se desconectó voluntariamente de los servicios.`, googleUser.email);
+    }
     setGoogleUser(null);
     setGoogleToken('');
     setIsAuthenticated(false);
@@ -165,7 +189,7 @@ export default function App() {
   // Startup mount automatic check & load from Supabase Cloud
   useEffect(() => {
     const addSupabaseLogToStorage = (message: string, type: 'info' | 'success' | 'warn' | 'error') => {
-      const timestamp = new Date().toLocaleTimeString();
+      const timestamp = getMexicoCityTimeString();
       const localLogs = localStorage.getItem('verse_supabase_sync_logs');
       let logArray = [];
       if (localLogs) {
@@ -240,11 +264,13 @@ export default function App() {
               console.warn('Fallo al cargar de Supabase:', result.message);
               setSupabaseStatus('ERROR');
               addSupabaseLogToStorage(`Fallo en conexión: ${result.message}`, 'error');
+              appendAuditLog('ERROR', `Fallo al cargar desde Supabase: ${result.message}`);
             }
           } catch (error: any) {
             console.error('Error durante sincronización reactiva:', error);
             setSupabaseStatus('ERROR');
             addSupabaseLogToStorage(`Error crítico de persistencia: ${error.message || error}`, 'error');
+            appendAuditLog('ERROR', `Error crítico durante sincronización con Supabase: ${error.message || error}`);
           } finally {
             if (!isAutoTrigger) {
               setIsSupabaseLoading(false);
@@ -317,6 +343,10 @@ export default function App() {
   }, [auditLogs]);
 
   useEffect(() => {
+    const prevRole = localStorage.getItem('verse_crm_role');
+    if (prevRole && prevRole !== role) {
+      appendAuditLog('MODIFICACIÓN', `Cambio de perfil operativo de usuario a: ${role} (Perfil anterior: ${prevRole})`);
+    }
     localStorage.setItem('verse_crm_role', role);
   }, [role]);
 
@@ -391,18 +421,19 @@ export default function App() {
   };
 
   // Helper to append security logs
-  const appendAuditLog = (accion: AuditLog['accion'], detalles: string) => {
+  function appendAuditLog(accion: AuditLog['accion'], detalles: string, customOperador?: string) {
+    const activeOperator = customOperador || googleUser?.email || 'geovanni@verse-technology.com';
     const newLog: AuditLog = {
       id: `aud_${Date.now()}`,
-      fecha: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      fecha: getMexicoCityDateTimeString(),
       accion,
-      operador: 'geovanni@verse-technology.com',
+      operador: activeOperator,
       perfil: role,
       detalles
     };
     setAuditLogs((prev) => [newLog, ...prev]);
     syncAuditLogToSupabaseIfNeeded(newLog);
-  };
+  }
 
   // Restores standard factory demo values (Astra, Bimbo, UNAM)
   const handleResetDatabase = () => {
@@ -417,9 +448,9 @@ export default function App() {
     // Append initial system reset log
     const initialLog: AuditLog = {
       id: `aud_${Date.now()}`,
-      fecha: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      fecha: getMexicoCityDateTimeString(),
       accion: 'RESTABLECIMIENTO',
-      operador: 'geovanni@verse-technology.com',
+      operador: googleUser?.email || 'geovanni@verse-technology.com',
       perfil: role,
       detalles: 'Bitácora técnica de seguridad depurada e inicializada por el Administrador.'
     };
@@ -591,195 +622,303 @@ export default function App() {
       {/* LOWER DIVISION: SIDEBAR + MAIN CONTENT AREA */}
       <div className="flex flex-1 overflow-hidden">
         
-        {/* 1. LEFT SIDEBAR CON EXCELENTE DISEÑO WHITE POLISH */}
-        <aside className="w-56 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 z-30 select-none shadow-3xs">
+        {/* 1. LEFT SIDEBAR CON EXCELENTE DISEÑO WHITE POLISH COLLAPSIBLE */}
+        <motion.aside
+          initial={false}
+          animate={{ 
+            width: isSidebarCollapsed ? 68 : 224,
+          }}
+          transition={{ 
+            type: "spring", 
+            stiffness: 300, 
+            damping: 30 
+          }}
+          className="bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 z-30 select-none shadow-3xs relative"
+        >
+          {/* BOTÓN DE COLAPSO / EXPANSIÓN FLOTANTE */}
+          <button
+            onClick={toggleSidebar}
+            className="absolute -right-3.5 top-12 bg-white border border-slate-200 rounded-full p-1 shadow-[0_2px_4px_rgba(0,0,0,0.06),0_0_1px_rgba(0,0,0,0.12)] hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition-all z-50 cursor-pointer hidden sm:flex items-center justify-center w-7 h-7 group"
+            title={isSidebarCollapsed ? "Expandir menú (Consola)" : "Colapsar menú (Consola)"}
+          >
+            {isSidebarCollapsed ? (
+              <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+            ) : (
+              <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+            )}
+          </button>
           
           <div className="p-4 space-y-4">
             <div className="space-y-1">
-              <p className="text-[10px] font-bold text-slate-450 uppercase tracking-widest px-2 mb-2">
-                Consola Operativa
-              </p>
+              {!isSidebarCollapsed ? (
+                <p className="text-[10px] font-bold text-slate-450 uppercase tracking-widest px-2 mb-2 truncate">
+                  Consola Operativa
+                </p>
+              ) : (
+                <div className="h-px bg-slate-100 my-2 mx-1 duration-200" />
+              )}
               
               <button
                 onClick={() => setActiveTab('Dashboard')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'Dashboard'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Dashboard" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <LayoutDashboard className="w-4 h-4 shrink-0" />
-                  Dashboard
+                  <LayoutDashboard className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Dashboard</span>
+                  )}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
-                  activeTab === 'Dashboard' ? 'bg-blue-100 text-blue-700 font-bold' : 'bg-slate-100 text-slate-500'
-                }`}>
-                  {records.length}
-                </span>
+                {!isSidebarCollapsed && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                    activeTab === 'Dashboard' ? 'bg-blue-100 text-blue-700 font-bold' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {records.length}
+                  </span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('Leads/Projects')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'Leads/Projects'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Proyectos / Leads" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <Layers className="w-4 h-4 shrink-0" />
-                  Proyectos / Leads
+                  <Layers className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Proyectos / Leads</span>
+                  )}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
-                  activeTab === 'Leads/Projects' ? 'bg-blue-100 text-blue-700 font-bold' : 'bg-slate-100 text-slate-500'
-                }`}>
-                  {records.length}
-                </span>
+                {!isSidebarCollapsed && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                    activeTab === 'Leads/Projects' ? 'bg-blue-100 text-blue-700 font-bold' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {records.length}
+                  </span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('Quotations')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'Quotations'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Cotizaciones (PDF)" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                  Cotizaciones (PDF)
+                  <FileSpreadsheet className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Cotizaciones (PDF)</span>
+                  )}
                 </span>
-                <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-mono">$</span>
+                {!isSidebarCollapsed && (
+                  <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-mono">$</span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('PurchaseOrders')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'PurchaseOrders'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Órdenes de Compra" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <FileCheck className="w-4 h-4 shrink-0" />
-                  Órdenes de Compra
+                  <FileCheck className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Órdenes de Compra</span>
+                  )}
                 </span>
-                <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold">
-                  {records.filter((r) => r.estado_proyecto === 'Cerrado Ganado').length}
-                </span>
+                {!isSidebarCollapsed && (
+                  <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold">
+                    {records.filter((r) => r.estado_proyecto === 'Cerrado Ganado').length}
+                  </span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('Contacts')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'Contacts'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Contactos" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <Users className="w-4 h-4 shrink-0" />
-                  Contactos
+                  <Users className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Contactos</span>
+                  )}
                 </span>
-                <span className="bg-slate-105 text-slate-600 px-1.5 py-0.5 rounded text-[10px] font-mono">{contacts.length}</span>
+                {!isSidebarCollapsed && (
+                  <span className="bg-slate-105 text-slate-600 px-1.5 py-0.5 rounded text-[10px] font-mono">{contacts.length}</span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('Followups')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'Followups'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Bitácora Seguimiento" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <Compass className="w-4 h-4 shrink-0" />
-                  Bitácora Seguimiento
+                  <Compass className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Bitácora Seguimiento</span>
+                  )}
                 </span>
               </button>
             </div>
 
             <div className="border-t border-slate-100 pt-3 space-y-1">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">
-                Seguridad y Datos
-              </p>
+              {!isSidebarCollapsed ? (
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2 truncate">
+                  Seguridad y Datos
+                </p>
+              ) : (
+                <div className="h-px bg-slate-100 my-2 mx-1 duration-200" />
+              )}
 
-              <button
-                onClick={() => setActiveTab('Audit')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
-                  activeTab === 'Audit'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
-                    : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <span className="flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  Auditoría
-                </span>
-              </button>
+              {role === 'Admin' && (
+                <button
+                  onClick={() => setActiveTab('Audit')}
+                  className={`w-full flex items-center ${
+                    isSidebarCollapsed ? 'justify-center p-2.5' : 'px-3 py-2'
+                  } text-xs font-semibold rounded-md transition-all duration-300 ${
+                    activeTab === 'Audit'
+                      ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                  title={isSidebarCollapsed ? "Auditoría" : undefined}
+                >
+                  <span className="flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                    {!isSidebarCollapsed && (
+                      <span className="animate-in fade-in duration-200 truncate">Auditoría</span>
+                    )}
+                  </span>
+                </button>
+              )}
 
               <button
                 onClick={() => setActiveTab('SyncSettings')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'SyncSettings'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Config. Sheets" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <RefreshCw className="w-4 h-4 shrink-0" />
-                  Config. Sheets
+                  <RefreshCw className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Config. Sheets</span>
+                  )}
                 </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                {!isSidebarCollapsed && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('SyncSupabase')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'SyncSupabase'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Puente Supabase" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <Database className="w-4 h-4 shrink-0" />
-                  Puente Supabase
+                  <Database className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Puente Supabase</span>
+                  )}
                 </span>
-                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0"></span>
+                {!isSidebarCollapsed && (
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0"></span>
+                )}
               </button>
 
               <button
                 onClick={() => setActiveTab('UserProfile')}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-md transition-all ${
+                className={`w-full flex items-center ${
+                  isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } text-xs font-semibold rounded-md transition-all duration-300 ${
                   activeTab === 'UserProfile'
-                    ? 'bg-slate-100 text-blue-700 font-bold'
+                    ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
+                title={isSidebarCollapsed ? "Mi Perfil" : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <User className="w-4 h-4 shrink-0" />
-                  Mi Perfil
+                  <User className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                  {!isSidebarCollapsed && (
+                    <span className="animate-in fade-in duration-200 truncate">Mi Perfil</span>
+                  )}
                 </span>
-                <span className="text-[10px] bg-blue-50 text-blue-700 font-mono font-bold px-1.5 py-0.5 rounded">
-                  {role}
-                </span>
+                {!isSidebarCollapsed && (
+                  <span className="text-[10px] bg-blue-50 text-blue-700 font-mono font-bold px-1.5 py-0.5 rounded">
+                    {role}
+                  </span>
+                )}
               </button>
             </div>
           </div>
 
           {/* LOWER LIVE SYNC STATUS EN AMBIENTE GRIS CLARO */}
-          <div className="p-4 border-t border-slate-100 bg-slate-50">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></div>
-              <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Sheets Live Sync</span>
-            </div>
-            <p className="text-[10px] text-slate-450 leading-tight font-mono">
-              v_db_verse_prod_01<br />
-              Último cambio: Hace 2 min
-            </p>
+          <div className={`p-4 border-t border-slate-100 bg-slate-50 transition-all ${isSidebarCollapsed ? 'flex justify-center' : ''}`}>
+            {isSidebarCollapsed ? (
+              <div 
+                className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse cursor-help"
+                title="Sheets Live Sync Activo - v_db_verse_prod_01 (Último cambio: Hace 2 min)"
+              />
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Sheets Live Sync</span>
+                </div>
+                <p className="text-[10px] text-slate-450 leading-tight font-mono">
+                  v_db_verse_prod_01<br />
+                  <span className="text-slate-400 text-[9px]">Último cambio: Hace 2 min</span>
+                </p>
+              </>
+            )}
           </div>
-        </aside>
+        </motion.aside>
 
         {/* 2. MAIN VIEW AREA / CENTRAL SECTION */}
         <main className="grow flex flex-col overflow-hidden bg-slate-50/55">
@@ -901,7 +1040,7 @@ export default function App() {
             )}
 
             {activeTab === 'Quotations' && (
-              <QuotationsSection records={records} exchangeRate={exchangeRate} />
+              <QuotationsSection records={records} exchangeRate={exchangeRate} onShowAudit={appendAuditLog} />
             )}
 
             {activeTab === 'PurchaseOrders' && (
@@ -948,7 +1087,7 @@ export default function App() {
             )}
 
             {activeTab === 'Audit' && (
-              <AuditSection logs={auditLogs} role={role} onClearLogs={handleClearLogs} />
+              <AuditSection logs={auditLogs} role={role} onClearLogs={handleClearLogs} onShowAudit={appendAuditLog} />
             )}
 
             {activeTab === 'SyncSettings' && (

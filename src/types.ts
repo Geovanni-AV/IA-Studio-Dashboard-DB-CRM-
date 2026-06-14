@@ -44,7 +44,7 @@ export interface CRMRecord {
 export interface AuditLog {
   id: string;
   fecha: string; // YYYY-MM-DD HH:mm:ss
-  accion: 'ALTA REGISTRO' | 'MODIFICACIÓN' | 'ELIMINACIÓN' | 'RESTABLECIMIENTO' | 'CONEXIÓN HOJA';
+  accion: 'ALTA REGISTRO' | 'MODIFICACIÓN' | 'ELIMINACIÓN' | 'RESTABLECIMIENTO' | 'CONEXIÓN HOJA' | 'INICIO SESIÓN' | 'CERRAR SESIÓN' | 'ERROR' | 'ANOMALÍA' | 'CÓMPUTO' | 'CONSULTA';
   operador: string; // geovanni@verse-technology.com
   perfil: UserRole;
   detalles: string;

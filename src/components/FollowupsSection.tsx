@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { CRMRecord, FollowupEntry, UserRole } from '../types';
+import { getMexicoCityDateTimeShortString } from '../dateUtils';
 import { MessageSquare, Phone, Mail, Settings, User, Compass, Calendar, AlertCircle } from 'lucide-react';
 
 interface FollowupsSectionProps {
@@ -47,7 +48,7 @@ export default function FollowupsSection({
 
     const newEntry: FollowupEntry = {
       id: `fl_${Date.now()}`,
-      fecha: new Date().toISOString().substring(0, 16).replace('T', ' '),
+      fecha: getMexicoCityDateTimeShortString(),
       tipo,
       creador: creador || 'Operador',
       notas: notas.trim()
@@ -59,7 +60,8 @@ export default function FollowupsSection({
     };
 
     onUpdateRecord(updatedRecord);
-    onShowAudit('MODIFICACIÓN', `Registró nota de seguimiento comercial (${tipo}) en folio ${activeRecord.informacion_general_folio}`);
+    const textSnippet = notas.trim().length > 60 ? `${notas.trim().substring(0, 60)}...` : notas.trim();
+    onShowAudit('MODIFICACIÓN', `Registró nota de seguimiento comercial (${tipo}) en folio ${activeRecord.informacion_general_folio}: "${textSnippet}"`);
 
     // Reset notes
     setNotas('');

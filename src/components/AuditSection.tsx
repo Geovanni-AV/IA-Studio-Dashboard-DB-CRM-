@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuditLog, UserRole } from '../types';
 import { ShieldCheck, Trash2, ShieldAlert, Lock, Search, FileDown } from 'lucide-react';
 
@@ -6,10 +6,41 @@ interface AuditSectionProps {
   logs: AuditLog[];
   role: UserRole;
   onClearLogs: () => void;
+  onShowAudit?: (action: string, details: string) => void;
 }
 
-export default function AuditSection({ logs, role, onClearLogs }: AuditSectionProps) {
+export default function AuditSection({ logs, role, onClearLogs, onShowAudit }: AuditSectionProps) {
   const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    if (role !== 'Admin' && onShowAudit) {
+      onShowAudit('ANOMALÍA', `Intento de acceso denegado a la bitácora técnica de seguridad por parte de un usuario con perfil: [${role}]`);
+    }
+  }, [role, onShowAudit]);
+
+  if (role !== 'Admin') {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 px-4 text-center max-w-lg mx-auto space-y-6 animate-in fade-in duration-300" id="unauthorized-audit-container">
+        <div className="w-20 h-20 bg-amber-50 border border-amber-200 rounded-full flex items-center justify-center text-amber-500 shadow-md">
+          <Lock className="w-10 h-10 animate-pulse" />
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-2xl font-bold text-[#0b1c30]">Acceso Altamente Restringido</h1>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            La bitácora de auditoría y registros inmutables de seguridad operativa contiene datos de cumplimiento que solo están disponibles para usuarios con el rol de <span className="font-bold text-[#004ddf]">Administrador</span>.
+          </p>
+        </div>
+        <div className="p-4 bg-slate-50 rounded-lg border border-slate-150 text-left w-full space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
+            <ShieldAlert className="w-4 h-4 text-amber-600" /> Detalle de Seguridad
+          </div>
+          <p className="text-xs text-slate-500 font-medium">
+            Su sesión actual como <span className="font-semibold text-slate-700">[{role}]</span> no tiene autorizado el acceso de lectura a los flujos operativos. Un intento de acceso ha sido advertido al sistema para su análisis de anomalías.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const handleClear = () => {
     if (role !== 'Admin') {
@@ -128,12 +159,22 @@ export default function AuditSection({ logs, role, onClearLogs }: AuditSectionPr
                       [{item.fecha}]
                     </td>
                     <td className="p-3">
-                      <span className={`inline-block px-1.5 py-0.2 rounded font-sans font-bold text-[9px] uppercase hover:opacity-90 border ${
-                        item.accion === 'ELIMINACIÓN'
-                          ? 'bg-red-50 text-red-700 border-red-150'
-                          : item.accion === 'ALTA REGISTRO'
-                            ? 'bg-blue-50 text-blue-700 border-blue-150'
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-150'
+                      <span className={`inline-block px-1.5 py-0.5 rounded font-sans font-bold text-[9px] uppercase hover:opacity-90 border ${
+                        item.accion === 'ELIMINACIÓN' || item.accion === 'ERROR'
+                          ? 'bg-red-50 text-red-750 border-red-200'
+                          : item.accion === 'ANOMALÍA'
+                            ? 'bg-amber-50 text-amber-800 border-amber-250 animate-pulse'
+                            : item.accion === 'ALTA REGISTRO'
+                              ? 'bg-blue-50 text-blue-750 border-blue-200'
+                              : item.accion === 'INICIO SESIÓN'
+                                ? 'bg-indigo-50 text-indigo-750 border-indigo-200'
+                                : item.accion === 'CERRAR SESIÓN'
+                                  ? 'bg-slate-50 text-slate-500 border-slate-200'
+                                  : item.accion === 'MODIFICACIÓN'
+                                    ? 'bg-sky-50 text-sky-750 border-sky-200'
+                                    : item.accion === 'RESTABLECIMIENTO'
+                                      ? 'bg-purple-50 text-purple-750 border-purple-200'
+                                      : 'bg-emerald-50 text-emerald-750 border-emerald-200'
                       }`}>
                         {item.accion}
                       </span>

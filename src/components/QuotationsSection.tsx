@@ -5,13 +5,21 @@ import { RefreshCcw, ExternalLink, HardDrive, Shield, FileText, ArrowRightLeft }
 interface QuotationsSectionProps {
   records: CRMRecord[];
   exchangeRate: number;
+  onShowAudit?: (action: string, details: string) => void;
 }
 
-export default function QuotationsSection({ records, exchangeRate }: QuotationsSectionProps) {
+export default function QuotationsSection({ records, exchangeRate, onShowAudit }: QuotationsSectionProps) {
   const [selectedRecordId, setSelectedRecordId] = useState<string>(records[0]?.id || '');
   const [targetMoneda, setTargetMoneda] = useState<'USD' | 'MXN'>('USD');
 
   const selectedRecord = records.find((r) => r.id === selectedRecordId) || records[0];
+
+  const handleCurrencyChange = (newMoneda: 'USD' | 'MXN') => {
+    setTargetMoneda(newMoneda);
+    if (onShowAudit) {
+      onShowAudit('CÓMPUTO', `Realizó conversión de divisas de cotizaciones a ${newMoneda} para análisis comparativo.`);
+    }
+  };
 
   // Price conversion computation
   const getConvertedPrice = (val: number, baseMoneda: 'USD' | 'MXN') => {
@@ -50,13 +58,13 @@ export default function QuotationsSection({ records, exchangeRate }: QuotationsS
         {/* Toggle Currencies */}
         <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200">
           <button
-            onClick={() => setTargetMoneda('MXN')}
+            onClick={() => handleCurrencyChange('MXN')}
             className={`px-3 py-1 text-xs font-bold rounded transition-all ${targetMoneda === 'MXN' ? 'bg-white shadow-sm text-[#004ddf]' : 'text-slate-500'}`}
           >
             MXN
           </button>
           <button
-            onClick={() => setTargetMoneda('USD')}
+            onClick={() => handleCurrencyChange('USD')}
             className={`px-3 py-1 text-xs font-bold rounded transition-all ${targetMoneda === 'USD' ? 'bg-white shadow-sm text-[#004ddf]' : 'text-slate-500'}`}
           >
             USD
@@ -234,9 +242,14 @@ export default function QuotationsSection({ records, exchangeRate }: QuotationsS
                 <p className="text-slate-500 mt-0.5">Accede al entregable formal de cotización en formato PDF.</p>
               </div>
               <a
-                href={selectedRecord.informacion_general_link_cotizacion}
+                href={selectedRecord.informacion_general_link_cotizacion || undefined}
                 target="_blank"
-                rel="referrer"
+                rel="noreferrer"
+                onClick={() => {
+                  if (onShowAudit) {
+                    onShowAudit('CONSULTA', `Consolidó y visualizó en Drive cotización de ${selectedRecord.informacion_general_cliente || 'Cliente'} (Folio ${selectedRecord.informacion_general_folio || 'Sin Folio'})`);
+                  }
+                }}
                 className="bg-[#0b1c30] text-white px-4 py-2 hover:bg-slate-800 transition-colors rounded text-xs font-bold inline-flex items-center gap-1"
               >
                 <ExternalLink className="w-3.5 h-3.5" />

@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { CRMRecord, Contact, AuditLog } from './types';
+import { getMexicoCityDateTimeString, getMexicoCityDateString } from './dateUtils';
 
 // Deterministic UUID converter for type-safe Supabase ID mapping
 export function toValidUUID(str: string): string {
@@ -376,11 +377,29 @@ export function mapRawCRMRecord(r: any): CRMRecord {
   if (Array.isArray(rawAcciones)) {
     acciones_parsed = rawAcciones;
   } else if (typeof rawAcciones === 'string' && rawAcciones.trim() !== '') {
-    try {
-      acciones_parsed = JSON.parse(rawAcciones);
-    } catch (e) {
-      console.warn('Error al parsear acciones_seguimiento:', e);
-      acciones_parsed = [];
+    const trimmed = rawAcciones.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        acciones_parsed = JSON.parse(trimmed);
+      } catch (e) {
+        // Fallback to single legacy entry if JSON structure parse fails
+        acciones_parsed = [{
+          id: `f_legacy_${Math.random().toString(36).substring(2, 9)}`,
+          fecha: getMexicoCityDateString(),
+          tipo: 'Llamada Telefónica',
+          creador: 'Historial',
+          notas: trimmed
+        }];
+      }
+    } else {
+      // It is a plain string. Gracefully treat as a legacy mockup or single line note
+      acciones_parsed = [{
+        id: `f_legacy_${Math.random().toString(36).substring(2, 9)}`,
+        fecha: getMexicoCityDateString(),
+        tipo: 'Llamada Telefónica',
+        creador: 'Historial',
+        notas: trimmed
+      }];
     }
   }
 
@@ -463,7 +482,7 @@ export function mapRawContact(c: any): Contact {
 export function mapRawAuditLog(l: any): AuditLog {
   return {
     id: getFlexibleValue(l, ['id', 'ID', '_id']) || `aud_${Math.random().toString(36).substr(2, 9)}`,
-    fecha: getFlexibleValue(l, ['fecha', 'Fecha']) || new Date().toISOString().replace('T', ' ').substring(0, 19),
+    fecha: getFlexibleValue(l, ['fecha', 'Fecha']) || getMexicoCityDateTimeString(),
     accion: getFlexibleValue(l, ['accion', 'Accion']) || 'MODIFICACIÓN',
     operador: getFlexibleValue(l, ['operador', 'Operador']) || 'sistema',
     perfil: getFlexibleValue(l, ['perfil', 'Perfil']) || 'Solo Lectura',
