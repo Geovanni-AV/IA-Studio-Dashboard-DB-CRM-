@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { CRMRecord, UserRole, FollowupEntry } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID } from '../supabaseService';
@@ -132,6 +133,8 @@ export default function LeadsSection({
   } | null>(null);
   const [closeReason, setCloseReason] = useState<string>('Ganado por precio');
   const [closeNotes, setCloseNotes] = useState<string>('');
+  const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
 
   // Persist VIP limits & meta on changes
   useEffect(() => {
@@ -289,6 +292,8 @@ export default function LeadsSection({
       alert(`Acceso denegado: El perfil "${role}" tiene bloqueado el alta de registros.`);
       return;
     }
+    setActiveDrawerRecordId(null);
+    setPendingDrag(null);
     setIsEditing(false);
     setFormId('');
     // Auto increment default folio
@@ -1075,7 +1080,14 @@ export default function LeadsSection({
       e.preventDefault();
       return;
     }
+    e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', recordId);
+    setDraggingCardId(recordId);
+  };
+
+  const handleCardDragEnd = () => {
+    setDraggingCardId(null);
+    setDragOverStage(null);
   };
 
   const handleCardStageChange = (
@@ -1160,8 +1172,20 @@ export default function LeadsSection({
 
   // Add card straight from Column Header
   const handleAddNewCardInStage = (stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido') => {
-    if (role === 'Solo Lectura') return;
-    
+    if (role === 'Solo Lectura') {
+      alert(`Acceso denegado: El perfil "${role}" tiene bloqueado el alta de registros.`);
+      return;
+    }
+
+    setActiveDrawerRecordId(null);
+    setPendingDrag(null);
+
+    setIsEditing(false);
+    setFormId('');
+
+    const nextNum = records.length + 1200 + Math.floor(Math.random() * 10);
+    setFormFolio(`VT-${nextNum}`);
+
     // Select correct backing parameter status
     if (stage === 'Negociación') {
       setFormStatus('Negociación');
@@ -1174,14 +1198,17 @@ export default function LeadsSection({
     // Clear out standard form values
     setFormCliente('');
     setFormPlanta('');
+    setFormPais('México');
     setFormProyecto('');
     setFormHardware(0);
     setFormServicios(0);
     setFormUbicacion('');
+    setFormMoneda('USD');
     setFormLinkCotizacion('');
+    setFormNotas('');
+    setFormSustituye('');
     
     // Open standard form
-    setIsEditing(false);
     setIsFormOpen(true);
 
     // After form represents save, we can intercept or let it assign naturally
@@ -1402,49 +1429,54 @@ export default function LeadsSection({
             return (
               <div 
                 key={stage}
-                className={`flex-1 min-w-[290px] max-w-[290px] bg-slate-50 rounded-xl p-3 border border-slate-200 flex flex-col shadow-3xs transition-all ${
-                  isOverWip ? 'ring-2 ring-red-500/30 border-red-300 bg-red-50/10' : ''
+                className={`flex-1 min-w-[290px] max-w-[290px] rounded-xl p-3 border flex flex-col transition-all ${
+                  dragOverStage === stage 
+                    ? 'bg-blue-50 border-blue-300 border-dashed ring-2 ring-blue-200' 
+                    : isOverWip 
+                      ? 'ring-2 ring-red-500/30 border-red-300 bg-red-50/10' 
+                      : 'bg-slate-50 border-slate-200'
                 }`}
                 onDragOver={(e) => {
                   e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (role !== 'Solo Lectura' && dragOverStage !== stage) {
+                    setDragOverStage(stage);
+                  }
+                }}
+                onDragEnter={(e) => {
+                  e.preventDefault();
                   if (role !== 'Solo Lectura') {
-                    e.currentTarget.classList.add('bg-slate-200/50');
+                    setDragOverStage(stage);
                   }
                 }}
                 onDragLeave={(e) => {
-                  e.currentTarget.classList.remove('bg-slate-200/50');
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverStage(prev => (prev === stage ? null : prev));
                 }}
                 onDrop={(e) => {
                   e.preventDefault();
-                  e.currentTarget.classList.remove('bg-slate-200/50');
+                  setDragOverStage(null);
+                  setDraggingCardId(null);
                   if (role === 'Solo Lectura') return;
-                  const recordId = e.dataTransfer.getData('text/plain');
+                  const recordId = e.dataTransfer.getData('text/plain') || draggingCardId;
                   if (!recordId) return;
                   handleCardStageChange(recordId, stage);
                 }}
               >
                 {/* COLUMN HEADER */}
                 <div className="flex items-start justify-between">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2.5 h-2.5 rounded-full ${styles.dot}`}></span>
-                      <h4 className="text-xs font-bold text-slate-800 tracking-tight">{stage}</h4>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                        isOverWip ? 'bg-red-200 text-red-800 font-black animate-pulse' : 'bg-slate-200 text-slate-700'
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${styles.dot}`}></span>
+                      <h4 className="text-[13px] font-medium text-slate-700">{stage}</h4>
+                      <span className={`text-[11px] px-1.5 rounded font-medium ${
+                        isOverWip ? 'bg-red-100 text-red-700' : 'text-slate-400'
                       }`}>
-                        {cards.length}
-                        {limit < 99 && <span className="text-[8px] font-normal text-slate-500 ml-0.5">/ {limit}</span>}
+                        {cards.length}{limit < 99 ? `/${limit}` : ''}
                       </span>
                     </div>
-                    {/* Sum of project values in Stage */}
-                    <div className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
-                      <span>Valor:</span>
-                      <span className="font-extrabold text-slate-700 font-data-mono">{formatCurrencyShort(totalMonto)} USD</span>
-                    </div>
-                    {/* Average time indicator */}
-                    <div className="text-[9px] text-slate-400 font-medium font-sans flex items-center gap-0.5" title="Promedio de días de los leads en esta etapa">
-                      <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                      <span>Promedio: <strong>{avgDays}d</strong></span>
+                    <div className="text-[11px] text-slate-400">
+                      {formatCurrencyShort(totalMonto)} USD · prom. {avgDays}d
                     </div>
                   </div>
 
@@ -1551,86 +1583,60 @@ export default function LeadsSection({
                           key={card.id}
                           draggable={role !== 'Solo Lectura'}
                           onDragStart={(e) => handleCardDragStart(e, card.id)}
+                          onDragEnd={handleCardDragEnd}
                           onClick={() => {
                             setActiveDrawerRecordId(card.id);
                           }}
-                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text`}
+                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text ${
+                            draggingCardId === card.id ? 'opacity-40 scale-[0.98]' : ''
+                          }`}
                         >
-                          {/* TOP: Folio and Level Temperature */}
-                          <div className="flex items-center justify-between gap-1.5">
-                            <span className="text-[10px] font-black tracking-tight text-slate-800 font-mono">
+                          {/* PROJECT TITLE - main focus, Asana-style */}
+                          <h5 className="text-[12px] font-medium text-slate-800 leading-snug line-clamp-2">
+                            {card.informacion_general_proyecto || 'Sin descripción de proyecto'}
+                          </h5>
+
+                          {/* CLIENT + FOLIO row */}
+                          <div className="flex items-center justify-between mt-1 gap-2">
+                            <span className="text-[11px] text-slate-500 truncate">
+                              {card.informacion_general_cliente || 'Cliente sin asignar'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
                               {card.informacion_general_folio || 'S/F'}
                             </span>
-                            {/* Temperature level Badge */}
-                            <div className="scale-75 origin-right">
-                              {renderTemperatureBadge(card.status_proyecto)}
-                            </div>
                           </div>
 
-                          {/* MIDDLE CONTENT: Client and project description */}
-                          <div className="mt-1.5">
-                            <span className="block text-[10px] uppercase font-bold tracking-tight text-slate-500 leading-tight">
-                              {card.informacion_general_cliente || 'Cliente genérico'}
-                            </span>
-                            <h5 className="text-[11px] font-bold text-slate-800 mt-0.5 leading-snug line-clamp-2">
-                              {card.informacion_general_proyecto || 'N/A: Sin descripción comercial descriptiva.'}
-                            </h5>
+                          {/* AMOUNT */}
+                          <div className="mt-1.5 text-[13px] font-medium text-slate-900">
+                            ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                            <span className="text-[10px] text-slate-400 font-normal ml-1">{card.informacion_general_moneda || 'USD'}</span>
                           </div>
 
-                          {/* SUB SPEC: Amount formatted */}
-                          <div className="text-right mt-1 font-sans">
-                            <span className="text-slate-450 text-[8px] font-bold mr-1 uppercase">Monto total:</span>
-                            <span className="text-[11px] font-extrabold font-data-mono text-slate-900">
-                              ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                            </span>
-                            <span className="text-[8px] text-slate-400 font-bold ml-1">{card.informacion_general_moneda || 'USD'}</span>
-                          </div>
-
-                          {/* BOTTOM SPEC: Days in Stage, Subtasks and Owner */}
-                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {/* Days count with semaphore */}
-                              <span className={`text-[8.5px] px-1.5 py-0.5 rounded-md font-bold tracking-tight border flex items-center gap-0.5 ${semClass}`}>
-                                <Clock className="w-2.5 h-2.5" />
-                                {days}d en etapa
+                          {/* FOOTER ROW: days badge + temp badge + owner avatar, compact */}
+                          <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
+                                <Clock className="w-3 h-3" />
+                                {days}d
                               </span>
 
-                              {/* Checklist Indicator */}
-                              {hasSubtasks && (
-                                <span className="bg-slate-50 text-slate-600 border border-slate-200 text-[8.5px] px-1.5 py-0.5 rounded-md font-semibold flex items-center gap-0.5 shadow-4xs" title="Tareas en etapa completadas">
-                                  <CheckSquare className="w-2.5 h-2.5 text-slate-400" />
-                                  {completedCount}/{meta.subtasks.length}
-                                </span>
-                              )}
-
-                              {/* Next follow up past date indicator */}
-                              {overdue && (
-                                <span className="bg-red-50 text-red-700 border border-red-200 text-[8px] px-1.5 py-0.5 rounded-md font-bold flex items-center gap-0.5 animate-pulse" title="Próximo seguimiento atrasado">
-                                  <AlertCircle className="w-2.5 h-2.5 text-red-600 shrink-0" />
-                                  Sem Overdue
-                                </span>
+                              {(overdue || (hasSubtasks && completedCount < meta.subtasks.length)) && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500" title={overdue ? 'Seguimiento atrasado' : 'Tareas pendientes'} />
                               )}
                             </div>
 
-                            {/* Owner Avatar */}
-                            <div 
-                              className={`w-5 h-5 rounded-full ${getAvatarBg(meta.responsable)} text-[8px] font-black flex items-center justify-center shrink-0 shadow-3xs uppercase`}
-                              title={`Responsable: ${meta.responsable}`}
-                            >
-                              {getInitials(meta.responsable)}
+                            <div className="flex items-center gap-1.5">
+                              <div className="scale-90 origin-right">
+                                {renderTemperatureBadge(card.status_proyecto)}
+                              </div>
+                              <div 
+                                className={`w-6 h-6 rounded-full ${getAvatarBg(meta.responsable)} text-[10px] font-medium flex items-center justify-center shrink-0`}
+                                title={meta.responsable}
+                              >
+                                {getInitials(meta.responsable)}
+                              </div>
                             </div>
                           </div>
-
-                          {/* Extra Custom Tags lists */}
-                          {meta.tags && meta.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {meta.tags.map((tg, tIdx) => (
-                                <span key={tIdx} className="bg-slate-100 text-slate-600 border border-slate-200 text-[7px] px-1.5 py-0.2 rounded-md font-bold tracking-wide uppercase">
-                                  {tg}
-                                </span>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       );
                     })
@@ -1657,7 +1663,7 @@ export default function LeadsSection({
     const completed = meta.subtasks.filter(s => s.completed).length;
     const progress = meta.subtasks.length > 0 ? (completed / meta.subtasks.length) * 100 : 0;
 
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-50 overflow-hidden text-slate-800">
         {/* SEMITRANSPARENT OVERLAY CLOSING */}
         <div 
@@ -1981,7 +1987,8 @@ export default function LeadsSection({
             </button>
           </footer>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   };
 
@@ -2083,9 +2090,14 @@ export default function LeadsSection({
         <button
           key="add-btn-lead"
           id="add-record-trigger-btn"
-          onClick={handleOpenCreateMode}
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleOpenCreateMode();
+          }}
           disabled={role === 'Solo Lectura'}
-          className={`flex items-center gap-1.5 px-4 font-bold text-xs py-2 bg-blue-600 text-white rounded-md shadow-3xs hover:bg-blue-700 transition-all ${role === 'Solo Lectura' ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''}`}
+          className={`flex items-center gap-1.5 px-4 font-bold text-xs py-2 bg-blue-600 text-white rounded-md shadow-3xs hover:bg-blue-700 transition-all relative z-10 ${role === 'Solo Lectura' ? 'opacity-55 cursor-not-allowed bg-slate-400' : ''}`}
         >
           {role === 'Solo Lectura' ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
           NUEVA ENTRADA {role === 'Solo Lectura' && '(🔒)'}
@@ -2572,9 +2584,9 @@ export default function LeadsSection({
       )}
 
       {/* MODAL: DETAIL WINDOW */}
-      {isDetailOpen && selectedRecord && (
-        <div className="fixed inset-0 bg-[#0b1c30]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white border border-[#c6c6cd] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg shadow-xl flex flex-col">
+      {isDetailOpen && selectedRecord && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/40 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
+          <div className="bg-white border border-[#c6c6cd] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg shadow-xl flex flex-col relative z-[9999]">
             <header className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
               <div className="flex items-center gap-2 text-[#0b1c30]">
                 <FileText className="text-[#004ddf] w-5 h-5" />
@@ -2714,13 +2726,14 @@ export default function LeadsSection({
               </button>
             </footer>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL: INPUT FORM FOR CREATE or UPDATE */}
-      {isFormOpen && (
-        <div className="fixed inset-0 bg-[#0b1c30]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white border border-[#c6c6cd] w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-lg shadow-xl flex flex-col">
+      {isFormOpen && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/40 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
+          <div className="bg-white border border-[#c6c6cd] w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-lg shadow-xl flex flex-col relative z-[9999]">
             <header className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
               <h3 className="text-base font-semibold font-headline-md text-[#0b1c30]">
                 {isEditing ? `Modificar Oferta Comercial ${formFolio}` : 'Registrar Nuevo Proyecto Lead'}
@@ -2961,13 +2974,14 @@ export default function LeadsSection({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL: EXPLICIT 3D REMOVAL ALERT CONFIRMATION */}
-      {deleteConfirmOpen && recordToDelete && (
-        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-red-500 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-in zoom-in-95 duration-150">
+      {deleteConfirmOpen && recordToDelete && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-red-500 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-in zoom-in-95 duration-150 relative z-[9999]">
             <div className="flex items-center gap-3 text-red-600">
               <div className="p-3 bg-red-50 rounded-full text-red-600 border border-red-100 shadow-[inset_0_1px_2px_rgba(239,68,68,0.1)]">
                 <Trash2 className="w-6 h-6 stroke-[2]" />
@@ -3008,13 +3022,14 @@ export default function LeadsSection({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL: PDF MISSING WARNING & HELP OPTIONS */}
-      {pdfPromptOpen && pdfPromptRecord && (
-        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-[#004ddf]/30 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4 animate-in zoom-in-95 duration-150">
+      {pdfPromptOpen && pdfPromptRecord && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-[#004ddf]/30 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4 animate-in zoom-in-95 duration-150 relative z-[9999]">
             <div className="flex items-center gap-3 text-[#004ddf]">
               <div className="p-3 bg-blue-50 text-blue-600 rounded-full border border-blue-100 shadow-[inset_0_1px_2px_rgba(0,77,223,0.05)]">
                 <FileText className="w-6 h-6 stroke-[2]" />
@@ -3073,7 +3088,8 @@ export default function LeadsSection({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
