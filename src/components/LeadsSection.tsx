@@ -24,7 +24,12 @@ import {
   Activity,
   ChevronDown,
   ChevronUp,
-  ExternalLink
+  ExternalLink,
+  Clock,
+  CheckSquare,
+  MoreVertical,
+  AlertCircle,
+  Tag
 } from 'lucide-react';
 
 interface LeadsSectionProps {
@@ -34,6 +39,26 @@ interface LeadsSectionProps {
   onUpdateRecord: (record: CRMRecord) => void;
   onDeleteRecord: (id: string) => void;
   onShowAudit: (action: string, details: string) => void;
+}
+
+// Stage configuration thresholds for alerts
+const STAGE_THRESHOLDS: Record<string, { warn: number; critical: number }> = {
+  'Nuevo': { warn: 2, critical: 5 },
+  'Contactado': { warn: 4, critical: 8 },
+  'Cotizado': { warn: 5, critical: 10 },
+  'Negociación': { warn: 7, critical: 15 },
+  'Cerrado Ganado': { warn: 30, critical: 60 },
+  'Cerrado Perdido': { warn: 30, critical: 60 },
+};
+
+interface KanbanMeta {
+  stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
+  dateEnteredStage: string; // YYYY-MM-DD
+  responsable: string;
+  subtasks: { id: string; text: string; completed: boolean }[];
+  tags: string[];
+  motivoCierre?: string;
+  notasCierre?: string;
 }
 
 export default function LeadsSection({
@@ -46,6 +71,150 @@ export default function LeadsSection({
 }: LeadsSectionProps) {
   // Filtering & Search states
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Kanban and View modes states (Kanban initially active as default)
+  const [viewMode, setViewMode] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'portfolio'>('kanban');
+  
+  const [kanbanMeta, setKanbanMeta] = useState<Record<string, KanbanMeta>>(() => {
+    const saved = localStorage.getItem('verse_crm_kanban_meta');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // ignore
+      }
+    }
+    return {};
+  });
+
+  // WIP limits per column
+  const [wipLimits, setWipLimits] = useState<Record<string, number>>(() => {
+    const saved = localStorage.getItem('verse_crm_kanban_wip_limits');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {
+      'Nuevo': 5,
+      'Contactado': 4,
+      'Cotizado': 8,
+      'Negociación': 4,
+      'Cerrado Ganado': 99,
+      'Cerrado Perdido': 99,
+    };
+  });
+
+  // Sorting overrides per Kanban Column
+  const [columnSorting, setColumnSorting] = useState<Record<string, 'monto' | 'antiguedad' | 'responsable' | null>>({
+    'Nuevo': null,
+    'Contactado': null,
+    'Cotizado': null,
+    'Negociación': null,
+    'Cerrado Ganado': null,
+    'Cerrado Perdido': null,
+  });
+
+  // Kanban filters states
+  const [kanbanFilterResponsable, setKanbanFilterResponsable] = useState<string>('All');
+  const [kanbanFilterTemperature, setKanbanFilterTemperature] = useState<string>('All');
+  const [kanbanFilterClient, setKanbanFilterClient] = useState<string>('All');
+  const [kanbanMiKanbanOnly, setKanbanMiKanbanOnly] = useState<boolean>(false);
+
+  // Active drawer card ID
+  const [activeDrawerRecordId, setActiveDrawerRecordId] = useState<string | null>(null);
+
+  // HTML5 Drag states / close modal states
+  const [pendingDrag, setPendingDrag] = useState<{
+    recordId: string;
+    targetStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
+    sourceStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
+  } | null>(null);
+  const [closeReason, setCloseReason] = useState<string>('Ganado por precio');
+  const [closeNotes, setCloseNotes] = useState<string>('');
+
+  // Persist VIP limits & meta on changes
+  useEffect(() => {
+    localStorage.setItem('verse_crm_kanban_wip_limits', JSON.stringify(wipLimits));
+  }, [wipLimits]);
+
+  useEffect(() => {
+    localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(kanbanMeta));
+  }, [kanbanMeta]);
+
+  // Synchronise existing master list records with the Kanban system
+  useEffect(() => {
+    if (records.length > 0) {
+      let anyChange = false;
+      const updatedMeta = { ...kanbanMeta };
+      
+      const mockResponsables = ['Alex Mercer', 'Laura Ventas', 'Carlos Consultor', 'Sofía Torres', 'Andrés Ruiz', 'Geovanni Andrade'];
+      const mockTags = ['Renovación', 'Riesgo', 'SAT / ISO', 'Urgente', 'B2B Tech', 'SaaS', 'Planta Crítica'];
+      const stages: ('Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido')[] = [
+        'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
+      ];
+
+      records.forEach((r, idx) => {
+        if (!updatedMeta[r.id]) {
+          // Determine initial stage based on master list status
+          let stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido' = 'Nuevo';
+          if (r.estado_proyecto === 'Cerrado Ganado' || r.status_proyecto === 'Win') {
+            stage = 'Cerrado Ganado';
+          } else if (r.estado_proyecto === 'Negociación') {
+            stage = 'Negociación';
+          } else if (r.estado_proyecto === 'Propuesta') {
+            stage = 'Cotizado';
+          } else {
+            // cycle them
+            const stageIdx = idx % 6;
+            stage = stages[stageIdx];
+          }
+
+          // Varied entry dates to show traffic light visual system relative on load
+          let dateStr = '2026-06-12'; // 2 days ago (Amber alerts depending on column thresholds)
+          if (idx % 4 === 0) {
+            dateStr = '2026-06-14'; // 0 days ago (Green)
+          } else if (idx % 4 === 1) {
+            dateStr = '2026-06-08'; // 6 days ago (Amber or Red depending on thresh)
+          } else if (idx % 4 === 2) {
+            dateStr = '2026-05-29'; // 16 days ago (Red / Critical)
+          } else {
+            dateStr = '2026-06-13'; // 1 day ago (Green/Amber)
+          }
+
+          const resp = mockResponsables[idx % mockResponsables.length];
+          const subtaskTexts = stage === 'Nuevo' ? ["Establecer contacto inicial", "Agendar llamada Zoom", "Documentar requerimientos"]
+            : stage === 'Contactado' ? ["Enviar correo introductorio", "Calificar presupuesto", "Identificar decisores"]
+            : stage === 'Cotizado' ? ["Estructurar cotización de hardware", "Revisar costos servicios", "Propuesta preliminar", "Registrar SAT"]
+            : stage === 'Negociación' ? ["Ajustar margen", "Revisión gerencial", "Enviar minuta", "Validar planta"]
+            : ["Alta sistema SAP", "Solicitar folio OC", "Firma de contrato de prestación"];
+
+          const subtasks = subtaskTexts.map((txt, sidx) => ({
+            id: `s-${idx}-${sidx}`,
+            text: txt,
+            completed: sidx < (idx % subtaskTexts.length)
+          }));
+
+          const tags: string[] = [];
+          if (idx % 2 === 0) tags.push(mockTags[idx % mockTags.length]);
+          if (idx % 3 === 0) tags.push(mockTags[(idx + 2) % mockTags.length]);
+
+          updatedMeta[r.id] = {
+            stage,
+            dateEnteredStage: dateStr,
+            responsable: resp,
+            subtasks,
+            tags
+          };
+          anyChange = true;
+        }
+      });
+
+      if (anyChange) {
+        setKanbanMeta(updatedMeta);
+      }
+    }
+  }, [records]);
 
   // Advanced Filter states
   const [activeTabFilter, setActiveTabFilter] = useState<'all' | 'active' | 'closed'>('all');
@@ -838,6 +1007,1066 @@ export default function LeadsSection({
     );
   };
 
+  // ==========================================
+  // KANBAN VIEW LOGIC & RENDER SYSTEM (V2.5)
+  // ==========================================
+  const COLUMNS: ('Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido')[] = [
+    'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
+  ];
+
+  const RESPONSIBLES = ["Alex Mercer", "Laura Ventas", "Carlos Consultor", "Sofía Torres", "Andrés Ruiz", "Geovanni Andrade"];
+
+  const getDaysInStage = (dateEntered: string) => {
+    if (!dateEntered) return 0;
+    const dStart = new Date(dateEntered);
+    const dToday = new Date('2026-06-14T09:43:10'); // Mexican City time as per metadata
+    const diffTime = dToday.getTime() - dStart.getTime();
+    if (diffTime <= 0) return 0;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  const getInitials = (name: string) => {
+    if (!name) return '??';
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  };
+
+  const getAvatarBg = (name: string) => {
+    const colors = [
+      'bg-blue-600 text-white',
+      'bg-indigo-600 text-white',
+      'bg-purple-600 text-white',
+      'bg-pink-600 text-white',
+      'bg-emerald-600 text-white',
+      'bg-amber-600 text-white',
+      'bg-cyan-600 text-white'
+    ];
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h += name.charCodeAt(i);
+    return colors[h % colors.length];
+  };
+
+  const formatCurrencyShort = (amount: number) => {
+    if (amount >= 1e6) {
+      return `$${(amount / 1e6).toFixed(1)}M`;
+    }
+    if (amount >= 1e3) {
+      return `$${(amount / 1e3).toFixed(0)}k`;
+    }
+    return `$${amount.toFixed(0)}`;
+  };
+
+  const formatMexicoCityDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    try {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        const mIdx = parseInt(parts[1], 10) - 1;
+        return `${parts[2]} ${months[mIdx]}`;
+      }
+    } catch (e) {}
+    return dateStr;
+  };
+
+  // Drag operations
+  const handleCardDragStart = (e: React.DragEvent, recordId: string) => {
+    if (role === 'Solo Lectura') {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData('text/plain', recordId);
+  };
+
+  const handleCardStageChange = (
+    recordId: string, 
+    targetStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido'
+  ) => {
+    const currentMeta = kanbanMeta[recordId];
+    if (!currentMeta) return;
+    const sourceStage = currentMeta.stage;
+    if (sourceStage === targetStage) return;
+
+    if (targetStage === 'Cerrado Ganado' || targetStage === 'Cerrado Perdido') {
+      // Trigger confirmation modal
+      setPendingDrag({ recordId, targetStage, sourceStage });
+      setCloseReason(targetStage === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+      setCloseNotes('');
+    } else {
+      // Move immediately with audit trail
+      const updatedMeta = { ...kanbanMeta };
+      updatedMeta[recordId] = {
+        ...updatedMeta[recordId],
+        stage: targetStage,
+        dateEnteredStage: '2026-06-14' // resets "days on stage" to 0
+      };
+      setKanbanMeta(updatedMeta);
+
+      const r = records.find(rec => rec.id === recordId);
+      if (r) {
+        let newEstadoProyecto = r.estado_proyecto;
+        let newStatusProyecto = r.status_proyecto;
+
+        if (targetStage === 'Negociación') {
+          newEstadoProyecto = 'Negociación';
+          newStatusProyecto = 'Warm';
+        } else if (targetStage === 'Cotizado') {
+          newEstadoProyecto = 'Propuesta';
+          newStatusProyecto = 'Cool';
+        } else if (targetStage === 'Nuevo' || targetStage === 'Contactado') {
+          newEstadoProyecto = 'Propuesta';
+          newStatusProyecto = 'Cool';
+        }
+
+        onUpdateRecord({
+          ...r,
+          estado_proyecto: newEstadoProyecto,
+          status_proyecto: newStatusProyecto
+        });
+
+        onShowAudit('MODIFICACIÓN', `Licitación comercial ${r.informacion_general_folio} movida de [${sourceStage}] a [${targetStage}]. Días en etapa reiniciados.`);
+      }
+    }
+  };
+
+  const handleConfirmCloseDrag = () => {
+    if (!pendingDrag) return;
+    const { recordId, targetStage, sourceStage } = pendingDrag;
+    const updatedMeta = { ...kanbanMeta };
+    
+    updatedMeta[recordId] = {
+      ...updatedMeta[recordId],
+      stage: targetStage,
+      dateEnteredStage: '2026-06-14', // resets to 0
+      motivoCierre: closeReason,
+      notasCierre: closeNotes
+    };
+    setKanbanMeta(updatedMeta);
+
+    const r = records.find(rec => rec.id === recordId);
+    if (r) {
+      onUpdateRecord({
+        ...r,
+        estado_proyecto: targetStage === 'Cerrado Ganado' ? 'Cerrado Ganado' : null,
+        status_proyecto: targetStage === 'Cerrado Ganado' ? 'Win' : 'Cool', // cool placeholder
+        notas_comerciales: closeNotes ? `${r.notas_comerciales || ''}\n[Cierre ${targetStage} - Motivo: ${closeReason}]: ${closeNotes}` : r.notas_comerciales
+      });
+
+      onShowAudit('MODIFICACIÓN', `Fórmula B2B cerrada con éxito para ${r.informacion_general_folio} como [${targetStage}]. Motivo: ${closeReason}. Notas del cierre: ${closeNotes || 'ninguna'}`);
+    }
+
+    setPendingDrag(null);
+  };
+
+  // Add card straight from Column Header
+  const handleAddNewCardInStage = (stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido') => {
+    if (role === 'Solo Lectura') return;
+    
+    // Select correct backing parameter status
+    if (stage === 'Negociación') {
+      setFormStatus('Negociación');
+    } else if (stage === 'Cerrado Ganado') {
+      setFormStatus('Cerrado Ganado');
+    } else {
+      setFormStatus('Propuesta');
+    }
+    
+    // Clear out standard form values
+    setFormCliente('');
+    setFormPlanta('');
+    setFormProyecto('');
+    setFormHardware(0);
+    setFormServicios(0);
+    setFormUbicacion('');
+    setFormLinkCotizacion('');
+    
+    // Open standard form
+    setIsEditing(false);
+    setIsFormOpen(true);
+
+    // After form represents save, we can intercept or let it assign naturally
+  };
+
+  // Drawer action list helpers
+  const handleToggleSubtask = (recordId: string, subtaskId: string) => {
+    const updatedMeta = { ...kanbanMeta };
+    const meta = updatedMeta[recordId];
+    if (!meta) return;
+
+    meta.subtasks = meta.subtasks.map(s => 
+      s.id === subtaskId ? { ...s, completed: !s.completed } : s
+    );
+    setKanbanMeta(updatedMeta);
+  };
+
+  const handleAddSubtask = (recordId: string, text: string) => {
+    if (!text.trim()) return;
+    const updatedMeta = { ...kanbanMeta };
+    const meta = updatedMeta[recordId];
+    if (!meta) return;
+
+    const newS = {
+      id: `s-custom-${Date.now()}`,
+      text: text.trim(),
+      completed: false
+    };
+    meta.subtasks = [...meta.subtasks, newS];
+    setKanbanMeta(updatedMeta);
+  };
+
+  const renderKanbanView = () => {
+    // Generate filtered records per stage
+    const columnsWithCards = COLUMNS.map(stage => {
+      // Find cards mapped to this column
+      let cards = records.filter(r => {
+        const meta = kanbanMeta[r.id];
+        if (!meta) return false;
+        
+        // Match stage column
+        if (meta.stage !== stage) return false;
+
+        // Apply general text query filters (Search bar)
+        if (searchTerm.trim() !== '') {
+          const q = searchTerm.toLowerCase();
+          const matchesSearch = 
+            (r.informacion_general_folio || '').toLowerCase().includes(q) ||
+            (r.informacion_general_cliente || '').toLowerCase().includes(q) ||
+            (r.informacion_general_proyecto || '').toLowerCase().includes(q) ||
+            (r.informacion_general_planta || '').toLowerCase().includes(q);
+          if (!matchesSearch) return false;
+        }
+
+        // Filter by Owner / Responsable
+        if (kanbanFilterResponsable !== 'All') {
+          if (meta.responsable !== kanbanFilterResponsable) return false;
+        }
+
+        // Filter by Temperature / Level (HOT/COOL/WIN/WARM)
+        if (kanbanFilterTemperature !== 'All') {
+          if (r.status_proyecto !== kanbanFilterTemperature) return false;
+        }
+
+        // Filter by Client name
+        if (kanbanFilterClient !== 'All') {
+          if (r.informacion_general_cliente !== kanbanFilterClient) return false;
+        }
+
+        // Filter "Mi Kanban"
+        if (kanbanMiKanbanOnly) {
+          const isUserSaved = localStorage.getItem('verse_google_user');
+          const currentUserName = isUserSaved ? JSON.parse(isUserSaved)?.name || 'Geovanni Andrade' : 'Geovanni Andrade';
+          if (meta.responsable !== currentUserName) return false;
+        }
+
+        return true;
+      });
+
+      // Apply Column specific Sorting
+      const sortType = columnSorting[stage];
+      if (sortType === 'monto') {
+        cards = [...cards].sort((a,b) => (b.total_general_cotizacion || 0) - (a.total_general_cotizacion || 0));
+      } else if (sortType === 'antiguedad') {
+        cards = [...cards].sort((a,b) => {
+          const daysA = getDaysInStage(kanbanMeta[a.id]?.dateEnteredStage);
+          const daysB = getDaysInStage(kanbanMeta[b.id]?.dateEnteredStage);
+          return daysB - daysA; // Oldest first
+        });
+      } else if (sortType === 'responsable') {
+        cards = [...cards].sort((a,b) => {
+          const nameA = kanbanMeta[a.id]?.responsable || '';
+          const nameB = kanbanMeta[b.id]?.responsable || '';
+          return nameA.localeCompare(nameB);
+        });
+      }
+
+      const totalMonto = cards.reduce((acc, r) => acc + (r.total_general_cotizacion || 0), 0);
+      const limit = wipLimits[stage] || 99;
+      const isOverWip = cards.length > limit;
+
+      const totalDays = cards.reduce((acc, r) => acc + getDaysInStage(kanbanMeta[r.id]?.dateEnteredStage), 0);
+      const avgDays = cards.length > 0 ? (totalDays / cards.length).toFixed(1) : '0';
+
+      return {
+        stage,
+        cards,
+        totalMonto,
+        limit,
+        isOverWip,
+        avgDays
+      };
+    });
+
+    const uniqueClientsList = Array.from(new Set(records.map(r => r.informacion_general_cliente).filter(Boolean))) as string[];
+
+    return (
+      <div className="space-y-4 fade-in">
+        {/* KANBAN FILTER CONTROLS BAR */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-3xs flex flex-wrap items-center justify-between gap-3 text-left">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Filter by Owner */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Responsable</span>
+              <select
+                value={kanbanFilterResponsable}
+                onChange={(e) => setKanbanFilterResponsable(e.target.value)}
+                className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="All">👤 Todos los Responsables</option>
+                {RESPONSIBLES.map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filter by Temperature */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Temperatura</span>
+              <select
+                value={kanbanFilterTemperature}
+                onChange={(e) => setKanbanFilterTemperature(e.target.value)}
+                className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="All">🔥 Todas las Prioridades</option>
+                <option value="Hot">🔥 HOT (Caliente)</option>
+                <option value="Warm">⚡ WARM (Intermedio)</option>
+                <option value="Cool">❄️ COOL (Congelado)</option>
+                <option value="Win">🏆 WIN (Ganado)</option>
+              </select>
+            </div>
+
+            {/* Filter by Client */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">Planta / Cliente</span>
+              <select
+                value={kanbanFilterClient}
+                onChange={(e) => setKanbanFilterClient(e.target.value)}
+                className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors focus:ring-1 focus:ring-blue-500 max-w-[200px]"
+              >
+                <option value="All">🏭 Todos los Clientes</option>
+                {uniqueClientsList.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Clear Filters Button */}
+            {(kanbanFilterResponsable !== 'All' || kanbanFilterTemperature !== 'All' || kanbanFilterClient !== 'All' || searchTerm !== '') && (
+              <button
+                onClick={() => {
+                  setKanbanFilterResponsable('All');
+                  setKanbanFilterTemperature('All');
+                  setKanbanFilterClient('All');
+                  setSearchTerm('');
+                }}
+                className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg border border-red-200 self-end mt-4 h-8 transition-all"
+              >
+                <FilterX className="w-3.5 h-3.5" />
+                Limpiar Filtros
+              </button>
+            )}
+          </div>
+
+          {/* Toggle Mi Kanban */}
+          <div className="flex items-center gap-2 self-end">
+            <button
+              onClick={() => setKanbanMiKanbanOnly(!kanbanMiKanbanOnly)}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                kanbanMiKanbanOnly 
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs' 
+                  : 'bg-white text-slate-600 border-slate-250 hover:bg-slate-50 hover:text-slate-800'
+              }`}
+            >
+              👤 Mi Kanban
+            </button>
+          </div>
+        </div>
+
+        {/* HORIZONTAL SCROLL COLUMNS VIEW */}
+        <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-thin scrollbar-thumb-slate-350 select-none">
+          {columnsWithCards.map(({ stage, cards, totalMonto, limit, isOverWip, avgDays }) => {
+            
+            // Render specific Stage Headers
+            const getStageStyles = (st: string) => {
+              switch (st) {
+                case 'Nuevo': return { dot: 'bg-blue-500', bg: 'bg-blue-50 text-blue-800 border-blue-200' };
+                case 'Contactado': return { dot: 'bg-cyan-500', bg: 'bg-cyan-50 text-cyan-800 border-cyan-200' };
+                case 'Cotizado': return { dot: 'bg-amber-500', bg: 'bg-amber-50 text-amber-800 border-amber-200' };
+                case 'Negociación': return { dot: 'bg-purple-500', bg: 'bg-purple-50 text-purple-800 border-purple-200' };
+                case 'Cerrado Ganado': return { dot: 'bg-emerald-500', bg: 'bg-emerald-50 text-emerald-850 border-emerald-200' };
+                case 'Cerrado Perdido': return { dot: 'bg-slate-500', bg: 'bg-slate-50 text-slate-800 border-slate-200' };
+                default: return { dot: 'bg-slate-450', bg: 'bg-slate-50 text-slate-700' };
+              }
+            };
+            const styles = getStageStyles(stage);
+
+            return (
+              <div 
+                key={stage}
+                className={`flex-1 min-w-[290px] max-w-[290px] bg-slate-50 rounded-xl p-3 border border-slate-200 flex flex-col shadow-3xs transition-all ${
+                  isOverWip ? 'ring-2 ring-red-500/30 border-red-300 bg-red-50/10' : ''
+                }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (role !== 'Solo Lectura') {
+                    e.currentTarget.classList.add('bg-slate-200/50');
+                  }
+                }}
+                onDragLeave={(e) => {
+                  e.currentTarget.classList.remove('bg-slate-200/50');
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove('bg-slate-200/50');
+                  if (role === 'Solo Lectura') return;
+                  const recordId = e.dataTransfer.getData('text/plain');
+                  if (!recordId) return;
+                  handleCardStageChange(recordId, stage);
+                }}
+              >
+                {/* COLUMN HEADER */}
+                <div className="flex items-start justify-between">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2.5 h-2.5 rounded-full ${styles.dot}`}></span>
+                      <h4 className="text-xs font-bold text-slate-800 tracking-tight">{stage}</h4>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                        isOverWip ? 'bg-red-200 text-red-800 font-black animate-pulse' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {cards.length}
+                        {limit < 99 && <span className="text-[8px] font-normal text-slate-500 ml-0.5">/ {limit}</span>}
+                      </span>
+                    </div>
+                    {/* Sum of project values in Stage */}
+                    <div className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
+                      <span>Valor:</span>
+                      <span className="font-extrabold text-slate-700 font-data-mono">{formatCurrencyShort(totalMonto)} USD</span>
+                    </div>
+                    {/* Average time indicator */}
+                    <div className="text-[9px] text-slate-400 font-medium font-sans flex items-center gap-0.5" title="Promedio de días de los leads en esta etapa">
+                      <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span>Promedio: <strong>{avgDays}d</strong></span>
+                    </div>
+                  </div>
+
+                  {/* COLUMN CONTROLS */}
+                  <div className="flex items-center gap-0.5 relative">
+                    {/* Add Button */}
+                    <button
+                      onClick={() => handleAddNewCardInStage(stage)}
+                      disabled={role === 'Solo Lectura'}
+                      className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 disabled:opacity-40 transition-colors"
+                      title="Agregar nueva tarjeta a esta etapa"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                    
+                    {/* sorting override menu button */}
+                    <button
+                      onClick={() => {
+                        const nextSort = 
+                          columnSorting[stage] === null ? 'monto' : 
+                          columnSorting[stage] === 'monto' ? 'antiguedad' : 
+                          columnSorting[stage] === 'antiguedad' ? 'responsable' : null;
+                        setColumnSorting({ ...columnSorting, [stage]: nextSort });
+                      }}
+                      className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 transition-colors"
+                      title={`Ordenar columna (Actual: ${columnSorting[stage] || 'Por Defecto'})`}
+                    >
+                      <MoreVertical className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* WIP LIMIT OVER-ALERT */}
+                {isOverWip && (
+                  <div className="mt-2 bg-red-100 border border-red-200 px-2.5 py-1 rounded text-[9px] text-red-700 font-bold flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 text-red-600 shrink-0" />
+                    <span>Límite WIP excedido ({cards.length} &gt; {limit})</span>
+                  </div>
+                )}
+
+                {/* VISUAL RULERS */}
+                <div className="h-px bg-slate-200 mt-2.5 mb-3"></div>
+
+                {/* LIST OF CARDS */}
+                <div className="space-y-2.5 overflow-y-auto flex-1 pr-0.5 select-text">
+                  {cards.length === 0 ? (
+                    <div className="h-28 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-3 text-center text-slate-400">
+                      <span className="text-[10px] font-medium font-mono uppercase tracking-wider">Vacío / Sin leads</span>
+                      <p className="text-[9px] mt-1 shrink-0">Arrastra una ficha aquí para mover.</p>
+                    </div>
+                  ) : (
+                    cards.map((card) => {
+                      const meta = kanbanMeta[card.id] || {
+                        stage: 'Nuevo',
+                        dateEnteredStage: '2026-06-14',
+                        responsable: 'Alex Mercer',
+                        subtasks: [],
+                        tags: []
+                      };
+                      
+                      const days = getDaysInStage(meta.dateEnteredStage);
+                      
+                      // semaphore class
+                      const getDaysSemaphore = (st: string, d: number) => {
+                        const thresh = STAGE_THRESHOLDS[st] || { warn: 5, critical: 10 };
+                        if (d >= thresh.critical) {
+                          return 'bg-red-50 text-red-700 border-red-200';
+                        } else if (d >= thresh.warn) {
+                          return 'bg-amber-50 text-amber-700 border-amber-200';
+                        } else {
+                          return 'bg-green-50 text-green-700 border-green-200';
+                        }
+                      };
+                      const semClass = getDaysSemaphore(stage, days);
+
+                      // next follow up overdue alert check
+                      const checkFollowupOverdue = () => {
+                        if (!card.acciones_seguimiento || card.acciones_seguimiento.length === 0) return false;
+                        const lastFollow = card.acciones_seguimiento[card.acciones_seguimiento.length - 1];
+                        if (!lastFollow.fecha) return false;
+                        const fDate = new Date(lastFollow.fecha);
+                        const tDate = new Date('2026-06-14'); // Today metadata
+                        return fDate < tDate;
+                      };
+                      const overdue = checkFollowupOverdue();
+
+                      // Checklist stats
+                      const completedCount = meta.subtasks.filter(s => s.completed).length;
+                      const hasSubtasks = meta.subtasks.length > 0;
+
+                      // Level left color-code bar
+                      const getTemperatureLeftBar = (temp: string | null | undefined) => {
+                        switch (temp) {
+                          case 'Hot': return 'border-l-red-500';
+                          case 'Warm': return 'border-l-amber-500';
+                          case 'Cool': return 'border-l-sky-500';
+                          case 'Win': return 'border-l-emerald-500';
+                          default: return 'border-l-slate-400';
+                        }
+                      };
+
+                      return (
+                        <div
+                          key={card.id}
+                          draggable={role !== 'Solo Lectura'}
+                          onDragStart={(e) => handleCardDragStart(e, card.id)}
+                          onClick={() => {
+                            setActiveDrawerRecordId(card.id);
+                          }}
+                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text`}
+                        >
+                          {/* TOP: Folio and Level Temperature */}
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-[10px] font-black tracking-tight text-slate-800 font-mono">
+                              {card.informacion_general_folio || 'S/F'}
+                            </span>
+                            {/* Temperature level Badge */}
+                            <div className="scale-75 origin-right">
+                              {renderTemperatureBadge(card.status_proyecto)}
+                            </div>
+                          </div>
+
+                          {/* MIDDLE CONTENT: Client and project description */}
+                          <div className="mt-1.5">
+                            <span className="block text-[10px] uppercase font-bold tracking-tight text-slate-500 leading-tight">
+                              {card.informacion_general_cliente || 'Cliente genérico'}
+                            </span>
+                            <h5 className="text-[11px] font-bold text-slate-800 mt-0.5 leading-snug line-clamp-2">
+                              {card.informacion_general_proyecto || 'N/A: Sin descripción comercial descriptiva.'}
+                            </h5>
+                          </div>
+
+                          {/* SUB SPEC: Amount formatted */}
+                          <div className="text-right mt-1 font-sans">
+                            <span className="text-slate-450 text-[8px] font-bold mr-1 uppercase">Monto total:</span>
+                            <span className="text-[11px] font-extrabold font-data-mono text-slate-900">
+                              ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                            </span>
+                            <span className="text-[8px] text-slate-400 font-bold ml-1">{card.informacion_general_moneda || 'USD'}</span>
+                          </div>
+
+                          {/* BOTTOM SPEC: Days in Stage, Subtasks and Owner */}
+                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {/* Days count with semaphore */}
+                              <span className={`text-[8.5px] px-1.5 py-0.5 rounded-md font-bold tracking-tight border flex items-center gap-0.5 ${semClass}`}>
+                                <Clock className="w-2.5 h-2.5" />
+                                {days}d en etapa
+                              </span>
+
+                              {/* Checklist Indicator */}
+                              {hasSubtasks && (
+                                <span className="bg-slate-50 text-slate-600 border border-slate-200 text-[8.5px] px-1.5 py-0.5 rounded-md font-semibold flex items-center gap-0.5 shadow-4xs" title="Tareas en etapa completadas">
+                                  <CheckSquare className="w-2.5 h-2.5 text-slate-400" />
+                                  {completedCount}/{meta.subtasks.length}
+                                </span>
+                              )}
+
+                              {/* Next follow up past date indicator */}
+                              {overdue && (
+                                <span className="bg-red-50 text-red-700 border border-red-200 text-[8px] px-1.5 py-0.5 rounded-md font-bold flex items-center gap-0.5 animate-pulse" title="Próximo seguimiento atrasado">
+                                  <AlertCircle className="w-2.5 h-2.5 text-red-600 shrink-0" />
+                                  Sem Overdue
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Owner Avatar */}
+                            <div 
+                              className={`w-5 h-5 rounded-full ${getAvatarBg(meta.responsable)} text-[8px] font-black flex items-center justify-center shrink-0 shadow-3xs uppercase`}
+                              title={`Responsable: ${meta.responsable}`}
+                            >
+                              {getInitials(meta.responsable)}
+                            </div>
+                          </div>
+
+                          {/* Extra Custom Tags lists */}
+                          {meta.tags && meta.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {meta.tags.map((tg, tIdx) => (
+                                <span key={tIdx} className="bg-slate-100 text-slate-600 border border-slate-200 text-[7px] px-1.5 py-0.2 rounded-md font-bold tracking-wide uppercase">
+                                  {tg}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // ==========================================
+  // ACTIVE DRAWER DETAIL SYSTEM (V2.5)
+  // ==========================================
+  const renderDrawerLateralPanel = () => {
+    if (!activeDrawerRecordId) return null;
+    const cardId = activeDrawerRecordId;
+    const card = records.find(r => r.id === cardId);
+    const meta = kanbanMeta[cardId];
+    if (!card || !meta) return null;
+
+    const completed = meta.subtasks.filter(s => s.completed).length;
+    const progress = meta.subtasks.length > 0 ? (completed / meta.subtasks.length) * 100 : 0;
+
+    return (
+      <div className="fixed inset-0 z-50 overflow-hidden text-slate-800">
+        {/* SEMITRANSPARENT OVERLAY CLOSING */}
+        <div 
+          className="absolute inset-0 bg-[#071322]/45 backdrop-blur-xs transition-opacity animate-fade-in"
+          onClick={() => setActiveDrawerRecordId(null)}
+        />
+
+        <div className="absolute inset-y-0 right-0 w-[450px] bg-white shadow-2xl flex flex-col border-l border-slate-200 animate-slide-in select-text">
+          {/* DRAWER HEADER */}
+          <header className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-left">
+            <div className="space-y-0.5">
+              <span className="text-[10px] uppercase font-font font-mono text-slate-400 font-bold">Consola Lead Detail</span>
+              <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-blue-600" />
+                Licitación {card.informacion_general_folio || 'S/F'}
+              </h3>
+            </div>
+            
+            <button 
+              onClick={() => setActiveDrawerRecordId(null)}
+              className="p-1 px-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition-all"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </header>
+
+          {/* DRAWER SCROLL CONTENT CONTAINER */}
+          <div className="flex-1 overflow-y-auto p-5 text-left space-y-5">
+            {/* 1. Cliente & Proyecto title editable summary */}
+            <div className="space-y-2">
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
+                <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Nombre de Proyecto</label>
+                <input
+                  type="text"
+                  value={card.informacion_general_proyecto || ''}
+                  onChange={(e) => {
+                    onUpdateRecord({ ...card, informacion_general_proyecto: e.target.value });
+                  }}
+                  disabled={role === 'Solo Lectura'}
+                  className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 py-1 font-bold text-xs outline-none text-slate-800 transition-all"
+                  placeholder="e.g. Medición de Flujo"
+                />
+
+                <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono mt-2">Cliente Legal</label>
+                <input
+                  type="text"
+                  value={card.informacion_general_cliente || ''}
+                  onChange={(e) => {
+                    onUpdateRecord({ ...card, informacion_general_cliente: e.target.value });
+                  }}
+                  disabled={role === 'Solo Lectura'}
+                  className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 py-1 font-semibold text-xs outline-none text-slate-700 transition-all font-sans"
+                  placeholder="e.g. Grupo Bimbo"
+                />
+              </div>
+            </div>
+
+            {/* 2. Pipeline Controls status re-assigners */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Select Stage */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] uppercase font-bold text-slate-400 font-mono">Etapa del Pipeline</span>
+                <select
+                  value={meta.stage}
+                  onChange={(e) => {
+                    const st = e.target.value as any;
+                    handleCardStageChange(card.id, st);
+                  }}
+                  disabled={role === 'Solo Lectura'}
+                  className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                >
+                  {COLUMNS.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select Responsable */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] uppercase font-bold text-slate-400 font-mono">Miembro Asignado</span>
+                <select
+                  value={meta.responsable}
+                  onChange={(e) => {
+                    const updatedMeta = { ...kanbanMeta };
+                    updatedMeta[card.id] = { ...updatedMeta[card.id], responsable: e.target.value };
+                    setKanbanMeta(updatedMeta);
+                    onShowAudit('MODIFICACIÓN', `Licitación comercial ${card.informacion_general_folio} reasignada a responsable [${e.target.value}].`);
+                  }}
+                  disabled={role === 'Solo Lectura'}
+                  className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                >
+                  {RESPONSIBLES.map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* 3. Costs parameters */}
+            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+              <h4 className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider font-mono">Métricas Económicas del Expediente</h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Suministros (HW)</label>
+                  <input
+                    type="number"
+                    value={card.total_hardware_cotizacion || 0}
+                    onChange={(e) => {
+                      const hw = Number(e.target.value);
+                      const sub = hw + (card.total_servicios_cotizacion || 0);
+                      const iva = sub * 0.16;
+                      const tot = sub + iva;
+                      onUpdateRecord({
+                        ...card,
+                        total_hardware_cotizacion: hw,
+                        total_subtotal_cotizacion: sub,
+                        total_iva_cotizacion: iva,
+                        total_general_cotizacion: tot
+                      });
+                    }}
+                    disabled={role === 'Solo Lectura'}
+                    className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Integ (Servicio)</label>
+                  <input
+                    type="number"
+                    value={card.total_servicios_cotizacion || 0}
+                    onChange={(e) => {
+                      const serv = Number(e.target.value);
+                      const sub = (card.total_hardware_cotizacion || 0) + serv;
+                      const iva = sub * 0.16;
+                      const tot = sub + iva;
+                      onUpdateRecord({
+                        ...card,
+                        total_servicios_cotizacion: serv,
+                        total_subtotal_cotizacion: sub,
+                        total_iva_cotizacion: iva,
+                        total_general_cotizacion: tot
+                      });
+                    }}
+                    disabled={role === 'Solo Lectura'}
+                    className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Read-Only calculations display */}
+              <div className="pt-2.5 border-t border-slate-200 flex justify-between text-xs font-bold">
+                <span className="text-slate-500">Monto Neto Acumulado (SAT):</span>
+                <span className="text-blue-700 font-data-mono shrink-0">
+                  ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} {card.informacion_general_moneda}
+                </span>
+              </div>
+            </div>
+
+            {/* 4. Checklist of subtasks */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-800 tracking-tight">Tareas de la Etapa actual</h4>
+                <span className="text-[10px] bg-slate-100 font-bold px-2 py-0.5 rounded-full border border-slate-250 text-slate-600">
+                  {completed}/{meta.subtasks.length} completadas
+                </span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                <div 
+                  className="h-full bg-emerald-500 rounded-full transition-all duration-300" 
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              {/* Checklist list */}
+              <div className="space-y-2 max-h-48 overflow-y-auto pt-1 pr-1">
+                {meta.subtasks.map(sub => (
+                  <label 
+                    key={sub.id} 
+                    className="flex items-start gap-2.5 p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors border border-slate-200"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={sub.completed}
+                      onChange={() => handleToggleSubtask(card.id, sub.id)}
+                      disabled={role === 'Solo Lectura'}
+                      className="mt-0.5 w-4.5 h-4.5 rounded border-slate-250 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className={`text-xs ${sub.completed ? 'line-through text-slate-400 font-medium' : 'text-slate-700 font-bold'}`}>
+                      {sub.text}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {/* Add checklist item */}
+              {role !== 'Solo Lectura' && (
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.currentTarget;
+                    const input = form.elements.namedItem('subtaskText') as HTMLInputElement;
+                    handleAddSubtask(card.id, input.value);
+                    form.reset();
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    type="text"
+                    name="subtaskText"
+                    placeholder="Agregar un nuevo requerimiento..."
+                    className="flex-1 bg-white border border-slate-200 py-1.5 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <button 
+                    type="submit"
+                    className="px-3.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition"
+                  >
+                    Agregar
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* 5. Custom tags */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-800">Chips y Categorías</h4>
+              <div className="flex flex-wrap gap-1.5">
+                {meta.tags.map((tg, idx) => (
+                  <span 
+                    key={idx} 
+                    className="bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1"
+                  >
+                    {tg}
+                    {role !== 'Solo Lectura' && (
+                      <button 
+                        onClick={() => {
+                          const updatedMeta = { ...kanbanMeta };
+                          updatedMeta[card.id].tags = updatedMeta[card.id].tags.filter(t => t !== tg);
+                          setKanbanMeta(updatedMeta);
+                        }}
+                        className="text-blue-500 hover:text-red-500 text-[10px]"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                ))}
+                
+                {role !== 'Solo Lectura' && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const form = e.currentTarget;
+                      const input = form.elements.namedItem('tagText') as HTMLInputElement;
+                      const val = input.value.trim().toUpperCase();
+                      if (val && !meta.tags.includes(val)) {
+                        const updatedMeta = { ...kanbanMeta };
+                        updatedMeta[card.id].tags = [...updatedMeta[card.id].tags, val];
+                        setKanbanMeta(updatedMeta);
+                      }
+                      form.reset();
+                    }}
+                    className="inline"
+                  >
+                    <input
+                      type="text"
+                      name="tagText"
+                      placeholder="+ Tag..."
+                      className="border border-slate-200 px-2.5 py-0.5 rounded-full text-[9px] outline-none focus:border-blue-500 w-20 text-center font-bold"
+                    />
+                  </form>
+                )}
+              </div>
+            </div>
+
+            {/* 6. Commercial observations */}
+            <div className="space-y-1">
+              <h4 className="text-xs font-bold text-slate-800">Bitácora & Notas</h4>
+              <textarea
+                value={card.notas_comerciales || ''}
+                onChange={(e) => {
+                  onUpdateRecord({ ...card, notas_comerciales: e.target.value });
+                }}
+                disabled={role === 'Solo Lectura'}
+                rows={4}
+                className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Escriba comentarios y notas de seguimiento..."
+              />
+            </div>
+
+            {/* 7. Timeline Type history logs */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-800">Historial de Seguimiento B2B</h4>
+              <div className="relative pl-4 border-l border-slate-200 space-y-4">
+                {card.acciones_seguimiento && card.acciones_seguimiento.map((f, fIdx) => (
+                  <div key={f.id || fIdx} className="relative">
+                    <span className="absolute -left-[20.5px] top-1 w-2.5 h-2.5 rounded-full bg-blue-600 border border-white" />
+                    <div className="text-[10px] text-slate-400 font-bold font-mono">
+                      {f.fecha}
+                    </div>
+                    <div className="text-[11px] font-black text-slate-700">
+                      {f.tipo} - <span className="text-[9px] text-slate-450 uppercase">{f.creador}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      {f.notas}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* DRAWER FOOTER */}
+          <footer className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <button
+              onClick={() => setActiveDrawerRecordId(null)}
+              className="px-5 py-2 bg-[#0c1827] text-white text-xs font-bold rounded-lg hover:bg-slate-900 transition shadow-3xs"
+            >
+              Cerrar Expediente
+            </button>
+          </footer>
+        </div>
+      </div>
+    );
+  };
+
+  // ==========================================
+  // CONFIRMATION CLOSE DRAG POPUP MODAL (V2.5)
+  // ==========================================
+  const renderConfirmationCloseModal = () => {
+    if (!pendingDrag) return null;
+    const { recordId, targetStage } = pendingDrag;
+    const r = records.find(rec => rec.id === recordId);
+    if (!r) return null;
+
+    const reasons = targetStage === 'Cerrado Ganado' 
+      ? ['Ganado por precio', 'Ganado por relación', 'Ganado por entrega', 'Ganado por tecnología', 'Otro']
+      : ['Perdido por presupuesto', 'Perdido por competencia', 'Perdido sin respuesta', 'Perdido por tiempos', 'Otro'];
+
+    return (
+      <div className="fixed inset-0 z-55 flex items-center justify-center p-4">
+        {/* BLUR BACKGROUND OVERLAY */}
+        <div 
+          className="absolute inset-0 bg-slate-950/50 backdrop-blur-xs transition-opacity animate-fade-in"
+          onClick={() => setPendingDrag(null)}
+        />
+
+        <div className="relative bg-white border border-slate-2 bg-white w-full max-w-md rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-scale-in text-slate-800">
+          <header className="px-5 py-3.5 bg-slate-50 border-b border-slate-150 text-left">
+            <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 uppercase font-sans tracking-wide">
+              <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+              Confirmar Cierre de Proyecto ({r.informacion_general_folio})
+            </h3>
+          </header>
+
+          <div className="p-5 text-left space-y-4">
+            <p className="text-xs text-slate-600 font-sans leading-relaxed">
+              Está a punto de archivar la licitación <strong>{r.informacion_general_proyecto}</strong> de {r.informacion_general_cliente} en el estado final <strong>({targetStage})</strong>.
+            </p>
+
+            {/* Select Reason */}
+            <div className="space-y-1">
+              <label className="block text-[10px] uppercase font-bold text-slate-450 font-mono tracking-wider">Motivo de Cierre</label>
+              <select
+                value={closeReason}
+                onChange={(e) => setCloseReason(e.target.value)}
+                className="w-full bg-slate-150/60 border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {reasons.map(res => (
+                  <option key={res} value={res}>{res}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Optional notes */}
+            <div className="space-y-1">
+              <label className="block text-[10px] uppercase font-bold text-slate-450 font-mono tracking-wider">Notas de Bitácora (Opcional)</label>
+              <textarea
+                value={closeNotes}
+                onChange={(e) => setCloseNotes(e.target.value)}
+                rows={3}
+                className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                placeholder="Indique más detalles sobre los motivos de esta resolución comercial..."
+              />
+            </div>
+          </div>
+
+          <footer className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+            <button
+              onClick={() => setPendingDrag(null)}
+              className="px-4 py-2 bg-slate-200 hover:bg-slate-250 text-slate-700 rounded-lg text-xs font-bold transition"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleConfirmCloseDrag}
+              className={`px-4 py-2 text-white rounded-lg text-xs font-bold transition shadow-3xs ${
+                targetStage === 'Cerrado Ganado' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
+              }`}
+            >
+              Archivar Expediente
+            </button>
+          </footer>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 fade-in">
       {/* Upper sub-header bar */}
@@ -900,8 +2129,67 @@ export default function LeadsSection({
         </div>
       </div>
 
-      {/* QUICK TABS PILLS FOR PIPELINE STATE */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+      {/* VIEW SELECTOR TABS */}
+      <div className="flex items-center gap-1 border-b border-slate-200 mt-2">
+        <button
+          onClick={() => setViewMode('list')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
+            viewMode === 'list'
+              ? 'border-blue-600 text-blue-700 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          List
+        </button>
+        <button
+          onClick={() => setViewMode('kanban')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
+            viewMode === 'kanban'
+              ? 'border-blue-600 text-blue-700 font-bold font-extrabold'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <rect x="3" y="3" width="7" height="9" rx="1" />
+            <rect x="14" y="3" width="7" height="5" rx="1" />
+            <rect x="14" y="10" width="7" height="11" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+          </svg>
+          Kanban
+          <span className="bg-blue-100 text-blue-800 text-[9px] px-1.5 py-0.5 rounded-full font-bold ml-1">Estándar</span>
+        </button>
+        <button
+          onClick={() => alert("La vista Calendario es una maqueta no funcional para futuras ampliaciones.")}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 border-transparent text-slate-400 cursor-not-allowed hover:bg-slate-50"
+        >
+          <Calendar className="w-4 h-4" strokeWidth={2.5} />
+          Calendar
+        </button>
+        <button
+          onClick={() => alert("La vista Gantt es una maqueta no funcional para futuras ampliaciones.")}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 border-transparent text-slate-400 cursor-not-allowed hover:bg-slate-50"
+        >
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M3 6h18M3 12h12M3 18h16" />
+          </svg>
+          Gantt
+        </button>
+        <button
+          onClick={() => alert("La vista Portafolio es una maqueta no funcional para futuras ampliaciones.")}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 border-transparent text-slate-400 cursor-not-allowed hover:bg-slate-50"
+        >
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          Portfolio
+        </button>
+      </div>
+
+      {viewMode === 'list' ? (
+        <>
+          {/* QUICK TABS PILLS FOR PIPELINE STATE */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         <div className="flex bg-slate-200/60 rounded-lg p-1 border border-slate-200">
           <button
             onClick={() => setActiveTabFilter('all')}
@@ -1274,6 +2562,14 @@ export default function LeadsSection({
           )}
         </div>
       </div>
+        </>
+      ) : (
+        <>
+          {renderKanbanView()}
+          {renderDrawerLateralPanel()}
+          {renderConfirmationCloseModal()}
+        </>
+      )}
 
       {/* MODAL: DETAIL WINDOW */}
       {isDetailOpen && selectedRecord && (
