@@ -30,7 +30,10 @@ import {
   CheckSquare,
   MoreVertical,
   AlertCircle,
-  Tag
+  Tag,
+  Settings,
+  GripVertical,
+  Check
 } from 'lucide-react';
 
 interface LeadsSectionProps {
@@ -53,7 +56,7 @@ const STAGE_THRESHOLDS: Record<string, { warn: number; critical: number }> = {
 };
 
 interface KanbanMeta {
-  stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
+  stage: string;
   dateEnteredStage: string; // YYYY-MM-DD
   responsable: string;
   subtasks: { id: string; text: string; completed: boolean }[];
@@ -87,6 +90,20 @@ export default function LeadsSection({
     }
     return {};
   });
+
+  const [kanbanColumns, setKanbanColumns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('verse_crm_kanban_columns');
+    return saved ? JSON.parse(saved) : ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
+  });
+
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignTargetStage, setAssignTargetStage] = useState('');
+  const [columnConfigOpen, setColumnConfigOpen] = useState(false);
+  const [newColumnName, setNewColumnName] = useState('');
+  const [editingColumnIdx, setEditingColumnIdx] = useState<number | null>(null);
+  const [editingColumnName, setEditingColumnName] = useState('');
+  const [draggedColumnIdx, setDraggedColumnIdx] = useState<number | null>(null);
+  const [activeColumnMenu, setActiveColumnMenu] = useState<string | null>(null);
 
   // WIP limits per column
   const [wipLimits, setWipLimits] = useState<Record<string, number>>(() => {
@@ -128,8 +145,8 @@ export default function LeadsSection({
   // HTML5 Drag states / close modal states
   const [pendingDrag, setPendingDrag] = useState<{
     recordId: string;
-    targetStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
-    sourceStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido';
+    targetStage: string;
+    sourceStage: string;
   } | null>(null);
   const [closeReason, setCloseReason] = useState<string>('Ganado por precio');
   const [closeNotes, setCloseNotes] = useState<string>('');
@@ -140,6 +157,10 @@ export default function LeadsSection({
   useEffect(() => {
     localStorage.setItem('verse_crm_kanban_wip_limits', JSON.stringify(wipLimits));
   }, [wipLimits]);
+
+  useEffect(() => {
+    localStorage.setItem('verse_crm_kanban_columns', JSON.stringify(kanbanColumns));
+  }, [kanbanColumns]);
 
   useEffect(() => {
     localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(kanbanMeta));
@@ -153,25 +174,14 @@ export default function LeadsSection({
       
       const mockResponsables = ['Alex Mercer', 'Laura Ventas', 'Carlos Consultor', 'Sofía Torres', 'Andrés Ruiz', 'Geovanni Andrade'];
       const mockTags = ['Renovación', 'Riesgo', 'SAT / ISO', 'Urgente', 'B2B Tech', 'SaaS', 'Planta Crítica'];
-      const stages: ('Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido')[] = [
+      const stages: (string)[] = [
         'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
       ];
 
       records.forEach((r, idx) => {
         if (!updatedMeta[r.id]) {
           // Determine initial stage based on master list status
-          let stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido' = 'Nuevo';
-          if (r.estado_proyecto === 'Cerrado Ganado' || r.status_proyecto === 'Win') {
-            stage = 'Cerrado Ganado';
-          } else if (r.estado_proyecto === 'Negociación') {
-            stage = 'Negociación';
-          } else if (r.estado_proyecto === 'Propuesta') {
-            stage = 'Cotizado';
-          } else {
-            // cycle them
-            const stageIdx = idx % 6;
-            stage = stages[stageIdx];
-          }
+          let stage: string = 'Sin Asignar';
 
           // Varied entry dates to show traffic light visual system relative on load
           let dateStr = '2026-06-12'; // 2 days ago (Amber alerts depending on column thresholds)
@@ -1015,7 +1025,7 @@ export default function LeadsSection({
   // ==========================================
   // KANBAN VIEW LOGIC & RENDER SYSTEM (V2.5)
   // ==========================================
-  const COLUMNS: ('Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido')[] = [
+  const COLUMNS: (string)[] = [
     'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
   ];
 
@@ -1092,7 +1102,7 @@ export default function LeadsSection({
 
   const handleCardStageChange = (
     recordId: string, 
-    targetStage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido'
+    targetStage: string
   ) => {
     const currentMeta = kanbanMeta[recordId];
     if (!currentMeta) return;
@@ -1171,47 +1181,13 @@ export default function LeadsSection({
   };
 
   // Add card straight from Column Header
-  const handleAddNewCardInStage = (stage: 'Nuevo' | 'Contactado' | 'Cotizado' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido') => {
+  const handleAddNewCardInStage = (stage: string) => {
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: El perfil "${role}" tiene bloqueado el alta de registros.`);
       return;
     }
-
-    setActiveDrawerRecordId(null);
-    setPendingDrag(null);
-
-    setIsEditing(false);
-    setFormId('');
-
-    const nextNum = records.length + 1200 + Math.floor(Math.random() * 10);
-    setFormFolio(`VT-${nextNum}`);
-
-    // Select correct backing parameter status
-    if (stage === 'Negociación') {
-      setFormStatus('Negociación');
-    } else if (stage === 'Cerrado Ganado') {
-      setFormStatus('Cerrado Ganado');
-    } else {
-      setFormStatus('Propuesta');
-    }
-    
-    // Clear out standard form values
-    setFormCliente('');
-    setFormPlanta('');
-    setFormPais('México');
-    setFormProyecto('');
-    setFormHardware(0);
-    setFormServicios(0);
-    setFormUbicacion('');
-    setFormMoneda('USD');
-    setFormLinkCotizacion('');
-    setFormNotas('');
-    setFormSustituye('');
-    
-    // Open standard form
-    setIsFormOpen(true);
-
-    // After form represents save, we can intercept or let it assign naturally
+    setAssignTargetStage(stage);
+    setAssignModalOpen(true);
   };
 
   // Drawer action list helpers
@@ -1243,7 +1219,7 @@ export default function LeadsSection({
 
   const renderKanbanView = () => {
     // Generate filtered records per stage
-    const columnsWithCards = COLUMNS.map(stage => {
+    const columnsWithCards = kanbanColumns.map(stage => {
       // Find cards mapped to this column
       let cards = records.filter(r => {
         const meta = kanbanMeta[r.id];
@@ -1486,26 +1462,198 @@ export default function LeadsSection({
                     <button
                       onClick={() => handleAddNewCardInStage(stage)}
                       disabled={role === 'Solo Lectura'}
-                      className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 disabled:opacity-40 transition-colors"
+                      className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
                       title="Agregar nueva tarjeta a esta etapa"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                     
-                    {/* sorting override menu button */}
+                    {/* sorting override menu button with dropdown list */}
                     <button
                       onClick={() => {
-                        const nextSort = 
-                          columnSorting[stage] === null ? 'monto' : 
-                          columnSorting[stage] === 'monto' ? 'antiguedad' : 
-                          columnSorting[stage] === 'antiguedad' ? 'responsable' : null;
-                        setColumnSorting({ ...columnSorting, [stage]: nextSort });
+                        setActiveColumnMenu(activeColumnMenu === stage ? null : stage);
                       }}
-                      className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 transition-colors"
-                      title={`Ordenar columna (Actual: ${columnSorting[stage] || 'Por Defecto'})`}
+                      className={`p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800 transition-colors cursor-pointer ${
+                        activeColumnMenu === stage ? 'bg-slate-200 text-slate-850' : ''
+                      }`}
+                      title="Configuración de columna"
                     >
                       <MoreVertical className="w-3.5 h-3.5" />
                     </button>
+
+                    {activeColumnMenu === stage && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40 bg-transparent" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveColumnMenu(null);
+                          }}
+                        />
+                        <div className="absolute right-0 top-7 w-[210px] bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-50 text-left animate-in fade-in slide-in-from-top-1 duration-100">
+                          {/* Heading: Ordenar por */}
+                          <div className="px-3 py-1 text-[9px] uppercase font-bold text-slate-400 font-mono tracking-wider">
+                            Ordenar columna
+                          </div>
+                          <button
+                            onClick={() => {
+                              setColumnSorting({ ...columnSorting, [stage]: 'monto' });
+                              setActiveColumnMenu(null);
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                          >
+                            <span>Monto de Cotización</span>
+                            {columnSorting[stage] === 'monto' && <Check className="w-3 h-3 text-blue-600" />}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setColumnSorting({ ...columnSorting, [stage]: 'antiguedad' });
+                              setActiveColumnMenu(null);
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                          >
+                            <span>Antigüedad (Días)</span>
+                            {columnSorting[stage] === 'antiguedad' && <Check className="w-3 h-3 text-blue-600" />}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setColumnSorting({ ...columnSorting, [stage]: 'responsable' });
+                              setActiveColumnMenu(null);
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                          >
+                            <span>Responsable</span>
+                            {columnSorting[stage] === 'responsable' && <Check className="w-3 h-3 text-blue-600" />}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setColumnSorting({ ...columnSorting, [stage]: null });
+                              setActiveColumnMenu(null);
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-705 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                          >
+                            <span>Por Defecto (Sin orden)</span>
+                            {columnSorting[stage] === null && <Check className="w-3 h-3 text-blue-600" />}
+                          </button>
+
+                          <div className="h-px bg-slate-100 my-1"></div>
+
+                          {/* Heading: Configurar */}
+                          <div className="px-3 py-1 text-[9px] uppercase font-bold text-slate-400 font-mono tracking-wider">
+                            Parámetros
+                          </div>
+                          <button
+                            onClick={() => {
+                              setActiveColumnMenu(null);
+                              const currentLimit = wipLimits[stage] !== undefined ? wipLimits[stage] : 99;
+                              const newLimitStr = prompt(`Establecer límite de trabajo en progreso (WIP) para "${stage}":`, String(currentLimit));
+                              if (newLimitStr !== null) {
+                                const numeric = parseInt(newLimitStr, 10);
+                                if (!isNaN(numeric) && numeric >= 0) {
+                                  setWipLimits(prev => ({
+                                    ...prev,
+                                    [stage]: numeric
+                                  }));
+                                } else {
+                                  alert("Introduce un número válido mayor o igual a 0.");
+                                }
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                          >
+                            <span>Límite WIP</span>
+                            <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.2 rounded font-mono">
+                              {limit < 99 ? limit : 'Sin límite'}
+                            </span>
+                          </button>
+
+                          <div className="h-px bg-slate-100 my-1"></div>
+
+                          {/* Heading: Column Actions */}
+                          <div className="px-3 py-1 text-[9px] uppercase font-bold text-slate-400 font-mono tracking-wider">
+                            Acciones de Columna
+                          </div>
+                          <button
+                            onClick={() => {
+                              setActiveColumnMenu(null);
+                              const newName = prompt("Introduce el nuevo nombre para la columna:", stage);
+                              if (newName && newName.trim() && newName !== stage) {
+                                const trimmed = newName.trim();
+                                if (kanbanColumns.includes(trimmed) || trimmed === 'Sin Asignar') {
+                                  alert('La columna ya existe o el nombre es inválido.');
+                                  return;
+                                }
+                                const updatedCols = [...kanbanColumns];
+                                const idx = updatedCols.indexOf(stage);
+                                if (idx !== -1) {
+                                  updatedCols[idx] = trimmed;
+                                  const newMeta = { ...kanbanMeta };
+                                  Object.keys(newMeta).forEach(key => {
+                                    if (newMeta[key].stage === stage) {
+                                      newMeta[key].stage = trimmed;
+                                    }
+                                  });
+                                  const newWip = { ...wipLimits };
+                                  if (newWip[stage] !== undefined) {
+                                    newWip[trimmed] = newWip[stage];
+                                    delete newWip[stage];
+                                  }
+                                  const newSorting = { ...columnSorting };
+                                  if (newSorting[stage] !== undefined) {
+                                    newSorting[trimmed] = newSorting[stage];
+                                    delete newSorting[stage];
+                                  }
+                                  setKanbanColumns(updatedCols);
+                                  setKanbanMeta(newMeta);
+                                  setWipLimits(newWip);
+                                  setColumnSorting(newSorting);
+                                }
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Edit2 className="w-3 h-3 text-slate-400" />
+                            <span>Editar Nombre</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setActiveColumnMenu(null);
+                              if (confirm(`¿Estás seguro de que deseas eliminar la columna "${stage}"?\nTodos los proyectos en esta columna se mantendrán disponibles y se moverán a la lista "Sin Asignar".`)) {
+                                setKanbanColumns(kanbanColumns.filter(c => c !== stage));
+                                const newMeta = { ...kanbanMeta };
+                                records.forEach(r => {
+                                  if (newMeta[r.id]?.stage === stage) {
+                                    newMeta[r.id] = {
+                                      ...newMeta[r.id],
+                                      stage: 'Sin Asignar',
+                                      dateEnteredStage: '2026-06-14'
+                                    };
+                                  }
+                                });
+                                setKanbanMeta(newMeta);
+                                const newWip = { ...wipLimits };
+                                if (newWip[stage]) delete newWip[stage];
+                                setWipLimits(newWip);
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-red-650 hover:bg-red-50 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3 text-red-500" />
+                            <span>Eliminar Columna</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setActiveColumnMenu(null);
+                              setColumnConfigOpen(true);
+                            }}
+                            className="w-full px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 flex items-center gap-1.5 border-t border-slate-100 mt-1 cursor-pointer"
+                          >
+                            <Settings className="w-3 h-3 text-blue-500" />
+                            <span>Configuración General</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1587,33 +1735,48 @@ export default function LeadsSection({
                           onClick={() => {
                             setActiveDrawerRecordId(card.id);
                           }}
-                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text ${
+                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-2 ${
                             draggingCardId === card.id ? 'opacity-40 scale-[0.98]' : ''
                           }`}
                         >
-                          {/* PROJECT TITLE - main focus, Asana-style */}
-                          <h5 className="text-[12px] font-medium text-slate-800 leading-snug line-clamp-2">
-                            {card.informacion_general_proyecto || 'Sin descripción de proyecto'}
-                          </h5>
+                          <div>
+                            {/* PROJECT TITLE - main focus, with folio */}
+                            <div className="flex items-start justify-between gap-1.5">
+                              <h5 className="text-[12px] font-bold text-slate-800 leading-snug line-clamp-2">
+                                {card.informacion_general_proyecto || 'Sin descripción de proyecto'}
+                              </h5>
+                              <span className="text-[9px] text-slate-400 font-mono font-bold bg-slate-100 px-1 rounded shrink-0" title="Folio del proyecto">
+                                {card.informacion_general_folio || 'S/F'}
+                              </span>
+                            </div>
 
-                          {/* CLIENT + FOLIO row */}
-                          <div className="flex items-center justify-between mt-1 gap-2">
-                            <span className="text-[11px] text-slate-500 truncate">
+                            {/* CLIENT row */}
+                            <p className="text-[11px] text-slate-500 truncate mt-0.5 font-medium">
                               {card.informacion_general_cliente || 'Cliente sin asignar'}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
-                              {card.informacion_general_folio || 'S/F'}
-                            </span>
+                            </p>
+
+                            {/* PROJECT DESCRIPTION SUMMARY (resumen de que trata el proyecto) */}
+                            {card.notas_comerciales && card.notas_comerciales.trim() && (
+                              <p className="text-[10px] text-slate-500 line-clamp-2 mt-1.5 leading-normal italic bg-slate-50/70 p-1.5 rounded border border-slate-100">
+                                {card.notas_comerciales}
+                              </p>
+                            )}
                           </div>
 
-                          {/* AMOUNT */}
-                          <div className="mt-1.5 text-[13px] font-medium text-slate-900">
-                            ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                            <span className="text-[10px] text-slate-400 font-normal ml-1">{card.informacion_general_moneda || 'USD'}</span>
+                          {/* FINANCIAL INFORMATION: Subtotal and Total */}
+                          <div className="mt-1 pb-1 flex flex-col gap-0.5 text-[11px] text-slate-600 bg-slate-50/40 p-1.5 rounded-lg border border-slate-100">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400 text-[10px]">Subtotal:</span>
+                              <span className="font-semibold text-slate-700">${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
+                            </div>
+                            <div className="flex justify-between border-t border-slate-100 pt-0.5 mt-0.5">
+                              <span className="text-slate-500 text-[10px] font-medium">Total:</span>
+                              <span className="font-bold text-slate-905">${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
+                            </div>
                           </div>
 
                           {/* FOOTER ROW: days badge + temp badge + owner avatar, compact */}
-                          <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <div className="mt-1 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5">
                               <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
                                 <Clock className="w-3 h-3" />
@@ -1623,6 +1786,27 @@ export default function LeadsSection({
                               {(overdue || (hasSubtasks && completedCount < meta.subtasks.length)) && (
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500" title={overdue ? 'Seguimiento atrasado' : 'Tareas pendientes'} />
                               )}
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim().startsWith('http')) {
+                                    window.open(card.informacion_general_link_cotizacion.trim(), '_blank');
+                                  } else {
+                                    setPdfPromptRecord(card);
+                                    setPdfPromptOpen(true);
+                                  }
+                                }}
+                                title={card.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
+                                className={`px-2 py-0.5 border rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold cursor-pointer ${
+                                  card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim()
+                                    ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 hover:shadow-3xs active:scale-95'
+                                    : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 active:scale-95'
+                                }`}
+                              >
+                                <FileText className="w-3 h-3 stroke-[2.5]" />
+                                <span>PDF</span>
+                              </button>
                             </div>
 
                             <div className="flex items-center gap-1.5">
@@ -1735,7 +1919,7 @@ export default function LeadsSection({
                   disabled={role === 'Solo Lectura'}
                   className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
                 >
-                  {COLUMNS.map(c => (
+                  {kanbanColumns.map(c => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
@@ -1988,7 +2172,7 @@ export default function LeadsSection({
           </footer>
         </div>
       </div>,
-      document.body
+      document.getElementById('root')!
     );
   };
 
@@ -2196,6 +2380,16 @@ export default function LeadsSection({
           </svg>
           Portfolio
         </button>
+
+        {viewMode === 'kanban' && role !== 'Solo Lectura' && (
+          <button
+            onClick={() => setColumnConfigOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 ml-auto text-[11px] font-bold transition-all text-slate-500 hover:text-slate-800 bg-white border border-slate-200 rounded-md shadow-3xs hover:bg-slate-50 mr-2 my-auto"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            Configurar Tablero
+          </button>
+        )}
       </div>
 
       {viewMode === 'list' ? (
@@ -2727,7 +2921,7 @@ export default function LeadsSection({
             </footer>
           </div>
         </div>,
-        document.body
+        document.getElementById('root')!
       )}
 
       {/* MODAL: INPUT FORM FOR CREATE or UPDATE */}
@@ -2975,7 +3169,7 @@ export default function LeadsSection({
             </form>
           </div>
         </div>,
-        document.body
+        document.getElementById('root')!
       )}
 
       {/* MODAL: EXPLICIT 3D REMOVAL ALERT CONFIRMATION */}
@@ -3023,7 +3217,7 @@ export default function LeadsSection({
             </div>
           </div>
         </div>,
-        document.body
+        document.getElementById('root')!
       )}
 
       {/* MODAL: PDF MISSING WARNING & HELP OPTIONS */}
@@ -3089,7 +3283,305 @@ export default function LeadsSection({
             </div>
           </div>
         </div>,
-        document.body
+        document.getElementById('root')!
+      )}
+
+      {/* MODAL: ASSIGN CARD TO KANBAN COLUMN */}
+      {assignModalOpen && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white border w-full max-w-lg rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[80vh]">
+            <header className="bg-slate-50 border-b border-slate-200 px-6 py-4">
+              <h3 className="font-bold text-slate-800">Agregar Lead a {assignTargetStage}</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Selecciona un proyecto disponible para integrarlo al tablero.</p>
+            </header>
+            <div className="p-4 overflow-y-auto bg-slate-50 flex-1 space-y-2">
+              {records.filter(r => kanbanMeta[r.id]?.stage === 'Sin Asignar').length === 0 ? (
+                <div className="text-sm text-center text-slate-400 py-6">
+                  No hay proyectos nuevos o sin asignar. Puedes crear uno nuevo desde la vista de lista.
+                </div>
+              ) : (
+                records.filter(r => kanbanMeta[r.id]?.stage === 'Sin Asignar').map(r => (
+                  <div key={r.id} className="bg-white p-4 border border-slate-200 rounded-xl shadow-xs hover:border-slate-300 transition-all flex flex-col gap-2.5">
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-mono text-slate-450 bg-slate-100 px-1.5 py-0.5 rounded font-bold shrink-0" title="Folio del proyecto">
+                            {r.informacion_general_folio || 'S/F'}
+                          </span>
+                          <h4 className="text-sm font-bold text-slate-800 truncate">
+                            {r.informacion_general_proyecto || 'Sin Nombre'}
+                          </h4>
+                        </div>
+                        <p className="text-xs font-semibold text-slate-500">
+                          {r.informacion_general_cliente || 'Sin Cliente'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          handleCardStageChange(r.id, assignTargetStage);
+                          setAssignModalOpen(false);
+                        }}
+                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer active:scale-95 shrink-0"
+                      >
+                        Asignar
+                      </button>
+                    </div>
+
+                    {r.notas_comerciales && r.notas_comerciales.trim() && (
+                      <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed italic bg-slate-50 p-2 rounded-lg border border-slate-100">
+                        {r.notas_comerciales}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between border-t border-dashed border-slate-150 pt-2.5 text-xs text-slate-600">
+                      <div className="flex items-center gap-2.5">
+                        <span>
+                          Subtotal: <strong className="font-bold text-slate-700">${(r.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {r.informacion_general_moneda || 'USD'}</strong>
+                        </span>
+                        <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
+                        <span>
+                          Total: <strong className="font-bold text-slate-900">${(r.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {r.informacion_general_moneda || 'USD'}</strong>
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim().startsWith('http')) {
+                            window.open(r.informacion_general_link_cotizacion.trim(), '_blank');
+                          } else {
+                            setPdfPromptRecord(r);
+                            setPdfPromptOpen(true);
+                          }
+                        }}
+                        title={r.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
+                        className={`px-2 py-1 border rounded-lg transition-all flex items-center gap-1 font-bold text-[10.5px] cursor-pointer ${
+                          r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim()
+                            ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-650 active:scale-95'
+                            : 'border-slate-200 bg-white text-slate-405 hover:bg-slate-50 active:scale-95'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>PDF</span>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <footer className="bg-white p-4 border-t border-slate-200 flex justify-end">
+              <button 
+                onClick={() => setAssignModalOpen(false)}
+                className="px-4 py-2 hover:bg-slate-100 text-slate-600 font-bold text-xs rounded-lg transition-colors border border-transparent hover:border-slate-300"
+              >
+                Cerrar
+              </button>
+            </footer>
+          </div>
+        </div>,
+        document.getElementById('root')!
+      )}
+
+      {/* MODAL: CONFIGURE COLUMNS */}
+      {columnConfigOpen && createPortal(
+        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-150">
+          <div className="bg-white border w-full max-w-lg rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[80vh]">
+            <header className="bg-slate-50 border-b border-slate-200 px-6 py-4">
+              <h3 className="font-bold text-slate-800">Configurar Columnas Kanban</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Agrega, edita o reordena columnas arrastrándolas por el indicador vertical. Al eliminar una columna, sus proyectos se conservarán y moverán a la lista "Sin Asignar" sin perder ningún dato.</p>
+            </header>
+            <div className="p-6 overflow-y-auto bg-slate-50 flex-1 space-y-4">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Nombre de la nueva columna..."
+                  value={newColumnName}
+                  onChange={e => setNewColumnName(e.target.value)}
+                  className="flex-1 bg-white border border-slate-300 px-3 py-2 rounded-lg text-sm outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={() => {
+                    const val = newColumnName.trim();
+                    if (val && !kanbanColumns.includes(val) && val !== 'Sin Asignar') {
+                      setKanbanColumns([...kanbanColumns, val]);
+                      setNewColumnName('');
+                    }
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-lg transition-colors disabled:opacity-50"
+                  disabled={!newColumnName.trim() || kanbanColumns.includes(newColumnName.trim())}
+                >
+                  Agregar
+                </button>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100 mt-4">
+                {kanbanColumns.map((col, i) => {
+                  const itemsInCol = records.filter(r => kanbanMeta[r.id]?.stage === col).length;
+                  const isEditing = editingColumnIdx === i;
+                  return (
+                    <div 
+                      key={col} 
+                      draggable={editingColumnIdx === null}
+                      onDragStart={(e) => {
+                        setDraggedColumnIdx(i);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                      }}
+                      onDragEnter={() => {
+                        if (draggedColumnIdx !== null && draggedColumnIdx !== i) {
+                          const updatedCols = [...kanbanColumns];
+                          const draggedCol = updatedCols[draggedColumnIdx];
+                          updatedCols.splice(draggedColumnIdx, 1);
+                          updatedCols.splice(i, 0, draggedCol);
+                          setKanbanColumns(updatedCols);
+                          setDraggedColumnIdx(i);
+                        }
+                      }}
+                      onDragEnd={() => {
+                        setDraggedColumnIdx(null);
+                      }}
+                      className={`flex justify-between items-center p-3 transition-all ${
+                        editingColumnIdx === null ? 'cursor-grab active:cursor-grabbing' : ''
+                      } ${draggedColumnIdx === i ? 'bg-blue-50/70 opacity-40' : 'bg-white hover:bg-slate-50'}`}
+                      title={editingColumnIdx === null ? "Arrastra para reordenar" : undefined}
+                    >
+                      <div className="flex items-center gap-3 flex-1 mr-4 min-w-0">
+                        {editingColumnIdx === null && (
+                          <GripVertical className="w-3.5 h-3.5 text-slate-350 shrink-0 cursor-grab" />
+                        )}
+                        <span className="w-5 h-5 flex items-center justify-center bg-slate-100 rounded text-slate-400 text-xs font-mono shrink-0">
+                          {i + 1}
+                        </span>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editingColumnName}
+                            onChange={(e) => setEditingColumnName(e.target.value)}
+                            className="flex-1 bg-white border border-blue-300 px-2 py-1 rounded text-sm outline-none focus:border-blue-500"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') setEditingColumnIdx(null);
+                            }}
+                          />
+                        ) : (
+                          <span className="font-medium text-sm text-slate-700 truncate">{col}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isEditing ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                const newName = editingColumnName.trim();
+                                if (!newName || (kanbanColumns.includes(newName) && newName !== col) || newName === 'Sin Asignar') {
+                                  alert('Nombre inválido o ya existe.');
+                                  return;
+                                }
+                                
+                                const updatedCols = [...kanbanColumns];
+                                updatedCols[i] = newName;
+                                
+                                // Update elements in meta
+                                const newMeta = { ...kanbanMeta };
+                                Object.keys(newMeta).forEach(key => {
+                                  if (newMeta[key].stage === col) {
+                                    newMeta[key].stage = newName;
+                                  }
+                                });
+
+                                // Update wip limits
+                                const newWip = { ...wipLimits };
+                                if (newWip[col] !== undefined) {
+                                  newWip[newName] = newWip[col];
+                                  delete newWip[col];
+                                }
+                                
+                                const newSorting = { ...columnSorting };
+                                if (newSorting[col] !== undefined) {
+                                  newSorting[newName] = newSorting[col];
+                                  delete newSorting[col];
+                                }
+                                
+                                setKanbanColumns(updatedCols);
+                                setKanbanMeta(newMeta);
+                                setWipLimits(newWip);
+                                setColumnSorting(newSorting);
+                                setEditingColumnIdx(null);
+                              }}
+                              className="px-2 py-1 text-xs font-bold text-blue-600 hover:bg-blue-50 rounded transition-colors bg-white border border-blue-205"
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              onClick={() => setEditingColumnIdx(null)}
+                              className="px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100 rounded transition-colors bg-white border border-slate-205"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-medium">
+                              {itemsInCol} {itemsInCol === 1 ? 'item' : 'items'}
+                            </span>
+                            <button
+                              onClick={() => {
+                                setEditingColumnIdx(i);
+                                setEditingColumnName(col);
+                              }}
+                              className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 rounded transition-colors"
+                              title="Editar columna"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setKanbanColumns(kanbanColumns.filter(c => c !== col));
+                                
+                                // Reset stage of all items matching this column to 'Sin Asignar'
+                                const newMeta = { ...kanbanMeta };
+                                records.forEach(r => {
+                                  if (newMeta[r.id]?.stage === col) {
+                                    newMeta[r.id] = {
+                                      ...newMeta[r.id],
+                                      stage: 'Sin Asignar',
+                                      dateEnteredStage: '2026-06-14'
+                                    };
+                                  }
+                                });
+                                setKanbanMeta(newMeta);
+
+                                // Remove wipLimits as well if they exist
+                                const newWip = { ...wipLimits };
+                                if (newWip[col]) delete newWip[col];
+                                setWipLimits(newWip);
+                              }}
+                              className="p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
+                              title="Eliminar columna (proyectos se mantienen como Sin Asignar)"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <footer className="bg-white p-4 border-t border-slate-200 flex justify-end">
+              <button 
+                onClick={() => setColumnConfigOpen(false)}
+                className="px-4 py-2 hover:bg-slate-100 text-slate-600 font-bold text-xs rounded-lg transition-colors border border-transparent hover:border-slate-300"
+              >
+                Cerrar
+              </button>
+            </footer>
+          </div>
+        </div>,
+        document.getElementById('root')!
       )}
     </div>
   );
