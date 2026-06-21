@@ -1016,6 +1016,7 @@ export default function App() {
             {activeTab === 'Leads/Projects' && (
               <LeadsSection
                 records={records}
+                contacts={contacts}
                 role={role}
                 onAddRecord={(nRecord) => {
                   setRecords((prev) => [nRecord, ...prev]);

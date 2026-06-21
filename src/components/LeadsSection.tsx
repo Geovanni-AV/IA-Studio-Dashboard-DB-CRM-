@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { CRMRecord, UserRole, FollowupEntry } from '../types';
+import { CRMRecord, UserRole, FollowupEntry, Contact } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID } from '../supabaseService';
 import { 
@@ -38,6 +38,7 @@ import {
 
 interface LeadsSectionProps {
   records: CRMRecord[];
+  contacts?: Contact[];
   role: UserRole;
   onAddRecord: (record: CRMRecord) => void;
   onUpdateRecord: (record: CRMRecord) => void;
@@ -67,12 +68,29 @@ interface KanbanMeta {
 
 export default function LeadsSection({
   records,
+  contacts = [],
   role,
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
   onShowAudit
 }: LeadsSectionProps) {
+  // Dynamic user assignment resolving from active session & registered commercial contacts
+  const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
+  const activeSessionUserName = isUserSaved ? JSON.parse(isUserSaved)?.name : 'Geovanni Andrade';
+
+  const registeredCommercial = (contacts || [])
+    .filter(c => c.esEnlaceComercial === true)
+    .map(c => c.nombre);
+
+  const RESPONSIBLES = registeredCommercial.length > 0
+    ? Array.from(new Set([
+        activeSessionUserName,
+        'Geovanni Andrade',
+        ...registeredCommercial
+      ])).filter(Boolean) as string[]
+    : ["Alex Mercer", "Laura Ventas", "Carlos Consultor", "Sofía Torres", "Andrés Ruiz", "Geovanni Andrade"];
+
   // Filtering & Search states
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -98,6 +116,9 @@ export default function LeadsSection({
 
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignTargetStage, setAssignTargetStage] = useState('');
+  const [assignModalSearch, setAssignModalSearch] = useState('');
+  const [assignModalTempFilter, setAssignModalTempFilter] = useState<string>('All');
+  const [selectedAssignIds, setSelectedAssignIds] = useState<string[]>([]);
   const [columnConfigOpen, setColumnConfigOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
   const [editingColumnIdx, setEditingColumnIdx] = useState<number | null>(null);
@@ -172,7 +193,7 @@ export default function LeadsSection({
       let anyChange = false;
       const updatedMeta = { ...kanbanMeta };
       
-      const mockResponsables = ['Alex Mercer', 'Laura Ventas', 'Carlos Consultor', 'Sofía Torres', 'Andrés Ruiz', 'Geovanni Andrade'];
+      const mockResponsables = RESPONSIBLES;
       const mockTags = ['Renovación', 'Riesgo', 'SAT / ISO', 'Urgente', 'B2B Tech', 'SaaS', 'Planta Crítica'];
       const stages: (string)[] = [
         'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
@@ -1029,8 +1050,6 @@ export default function LeadsSection({
     'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
   ];
 
-  const RESPONSIBLES = ["Alex Mercer", "Laura Ventas", "Carlos Consultor", "Sofía Torres", "Andrés Ruiz", "Geovanni Andrade"];
-
   const getDaysInStage = (dateEntered: string) => {
     if (!dateEntered) return 0;
     const dStart = new Date(dateEntered);
@@ -1151,6 +1170,54 @@ export default function LeadsSection({
     }
   };
 
+  const handleBulkStageChange = (
+    recordIds: string[],
+    targetStage: string
+  ) => {
+    if (recordIds.length === 0) return;
+
+    const updatedMeta = { ...kanbanMeta };
+
+    recordIds.forEach(id => {
+      const currentMeta = kanbanMeta[id];
+      if (!currentMeta) return;
+      const sourceStage = currentMeta.stage;
+      if (sourceStage === targetStage) return;
+
+      updatedMeta[id] = {
+        ...currentMeta,
+        stage: targetStage,
+        dateEnteredStage: '2026-06-14'
+      };
+
+      const r = records.find(rec => rec.id === id);
+      if (r) {
+        let newEstadoProyecto = r.estado_proyecto;
+        let newStatusProyecto = r.status_proyecto;
+
+        if (targetStage === 'Negociación') {
+          newEstadoProyecto = 'Negociación';
+          newStatusProyecto = 'Warm';
+        } else if (targetStage === 'Cotizado') {
+          newEstadoProyecto = 'Propuesta';
+          newStatusProyecto = 'Cool';
+        } else if (targetStage === 'Nuevo' || targetStage === 'Contactado') {
+          newEstadoProyecto = 'Propuesta';
+          newStatusProyecto = 'Cool';
+        }
+
+        onUpdateRecord({
+          ...r,
+          estado_proyecto: newEstadoProyecto,
+          status_proyecto: newStatusProyecto
+        });
+      }
+    });
+
+    setKanbanMeta(updatedMeta);
+    onShowAudit('MODIFICACIÓN', `${recordIds.length} proyectos asignados en lote a la etapa [${targetStage}].`);
+  };
+
   const handleConfirmCloseDrag = () => {
     if (!pendingDrag) return;
     const { recordId, targetStage, sourceStage } = pendingDrag;
@@ -1187,6 +1254,9 @@ export default function LeadsSection({
       return;
     }
     setAssignTargetStage(stage);
+    setAssignModalSearch('');
+    setAssignModalTempFilter('All');
+    setSelectedAssignIds([]);
     setAssignModalOpen(true);
   };
 
@@ -1267,7 +1337,7 @@ export default function LeadsSection({
       // Apply Column specific Sorting
       const sortType = columnSorting[stage];
       if (sortType === 'monto') {
-        cards = [...cards].sort((a,b) => (b.total_general_cotizacion || 0) - (a.total_general_cotizacion || 0));
+        cards = [...cards].sort((a,b) => (b.total_subtotal_cotizacion || 0) - (a.total_subtotal_cotizacion || 0));
       } else if (sortType === 'antiguedad') {
         cards = [...cards].sort((a,b) => {
           const daysA = getDaysInStage(kanbanMeta[a.id]?.dateEnteredStage);
@@ -1282,7 +1352,7 @@ export default function LeadsSection({
         });
       }
 
-      const totalMonto = cards.reduce((acc, r) => acc + (r.total_general_cotizacion || 0), 0);
+      const totalMonto = cards.reduce((acc, r) => acc + (r.total_subtotal_cotizacion || 0), 0);
       const limit = wipLimits[stage] || 99;
       const isOverWip = cards.length > limit;
 
@@ -1763,15 +1833,11 @@ export default function LeadsSection({
                             )}
                           </div>
 
-                          {/* FINANCIAL INFORMATION: Subtotal and Total */}
+                          {/* FINANCIAL INFORMATION: Subtotal */}
                           <div className="mt-1 pb-1 flex flex-col gap-0.5 text-[11px] text-slate-600 bg-slate-50/40 p-1.5 rounded-lg border border-slate-100">
                             <div className="flex justify-between">
-                              <span className="text-slate-400 text-[10px]">Subtotal:</span>
-                              <span className="font-semibold text-slate-700">${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
-                            </div>
-                            <div className="flex justify-between border-t border-slate-100 pt-0.5 mt-0.5">
-                              <span className="text-slate-500 text-[10px] font-medium">Total:</span>
-                              <span className="font-bold text-slate-905">${(card.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
+                              <span className="text-slate-500 font-medium text-[10px]">Subtotal Proyecto:</span>
+                              <span className="font-bold text-slate-905">${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
                             </div>
                           </div>
 
@@ -2618,7 +2684,7 @@ export default function LeadsSection({
                   {renderHeaderCell('client', 'Cliente')}
                   {renderHeaderCell('plant', 'Planta Industrial')}
                   {renderHeaderCell('project', 'Descripción Proyecto')}
-                  {renderHeaderCell('amount', 'Cotización Total', 'right')}
+                  {renderHeaderCell('amount', 'Subtotal Proyecto', 'right')}
                   {renderHeaderCell('status', 'Estado')}
                   {renderHeaderCell('level', 'Nivel / Termo', 'center')}
                   {renderHeaderCell('actions_followup', 'Acciones', 'center')}
@@ -2652,7 +2718,7 @@ export default function LeadsSection({
                         {r.informacion_general_proyecto || <span className="text-slate-400 font-normal italic">null</span>}
                       </td>
                       <td className={`p-3 px-4 text-right font-bold text-slate-900 font-data-mono truncate ${getColWidthClass('amount')}`}>
-                        {r.total_general_cotizacion.toLocaleString('en-US', {
+                        {(r.total_subtotal_cotizacion || 0).toLocaleString('en-US', {
                           style: 'currency',
                           currency: r.informacion_general_moneda,
                           minimumFractionDigits: 0
@@ -3294,89 +3360,309 @@ export default function LeadsSection({
               <h3 className="font-bold text-slate-800">Agregar Lead a {assignTargetStage}</h3>
               <p className="text-xs text-slate-500 mt-0.5">Selecciona un proyecto disponible para integrarlo al tablero.</p>
             </header>
-            <div className="p-4 overflow-y-auto bg-slate-50 flex-1 space-y-2">
-              {records.filter(r => kanbanMeta[r.id]?.stage === 'Sin Asignar').length === 0 ? (
-                <div className="text-sm text-center text-slate-400 py-6">
-                  No hay proyectos nuevos o sin asignar. Puedes crear uno nuevo desde la vista de lista.
+
+            {/* SEGMENTED FILTERS SECTION */}
+            <div className="bg-white border-b border-slate-200 p-4 space-y-3 shrink-0">
+              {/* Text Search */}
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                  <Search className="w-4 h-4 text-slate-405" />
+                </span>
+                <input
+                  type="text"
+                  value={assignModalSearch}
+                  onChange={(e) => setAssignModalSearch(e.target.value)}
+                  placeholder="Buscar por proyecto, cliente o folio..."
+                  className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-medium text-slate-700 placeholder-slate-400"
+                />
+                {assignModalSearch && (
+                  <button
+                    onClick={() => setAssignModalSearch('')}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <span className="text-[10px] font-sans bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded text-slate-505">Limpiar</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Termo / Temperature fast pills */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filtrar por nivel / termo:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {['All', 'Hot', 'Warm', 'Cool', 'Win'].map((tempVal) => {
+                    const getStyles = () => {
+                      if (assignModalTempFilter === tempVal) {
+                        switch (tempVal) {
+                          case 'All': return 'bg-slate-805 text-white border-slate-900 shadow-3xs scale-[0.98] font-bold';
+                          case 'Hot': return 'bg-red-600 text-white border-red-700 shadow-3xs scale-[0.98] font-bold';
+                          case 'Warm': return 'bg-amber-500 text-white border-amber-600 shadow-3xs scale-[0.98] font-bold';
+                          case 'Cool': return 'bg-blue-605 text-white border-blue-700 shadow-3xs scale-[0.98] font-bold';
+                          case 'Win': return 'bg-emerald-600 text-white border-emerald-700 shadow-3xs scale-[0.98] font-bold';
+                        }
+                      } else {
+                        switch (tempVal) {
+                          case 'All': return 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200 hover:border-slate-300';
+                          case 'Hot': return 'bg-red-50/40 hover:bg-red-50 text-red-700 border-red-100/70 hover:border-red-200';
+                          case 'Warm': return 'bg-amber-50/40 hover:bg-amber-50 text-amber-700 border-amber-100/70 hover:border-amber-200';
+                          case 'Cool': return 'bg-blue-50/40 hover:bg-blue-50 text-blue-700 border-blue-100/70 hover:border-blue-200';
+                          case 'Win': return 'bg-emerald-50/40 hover:bg-emerald-50 text-emerald-700 border-emerald-100/70 hover:border-emerald-200';
+                        }
+                      }
+                      return '';
+                    };
+
+                    const getDisplayLabel = () => {
+                      switch (tempVal) {
+                        case 'All': return 'Todos';
+                        case 'Hot': return '🔥 Hot';
+                        case 'Warm': return '⚡ Warm';
+                        case 'Cool': return '❄️ Cool';
+                        case 'Win': return '🏆 Win';
+                        default: return tempVal;
+                      }
+                    };
+
+                    return (
+                      <button
+                        key={tempVal}
+                        onClick={() => setAssignModalTempFilter(tempVal)}
+                        className={`px-2.5 py-1 text-[11px] rounded-lg border transition-all cursor-pointer select-none font-semibold ${getStyles()}`}
+                      >
+                        {getDisplayLabel()}
+                      </button>
+                    );
+                  })}
                 </div>
-              ) : (
-                records.filter(r => kanbanMeta[r.id]?.stage === 'Sin Asignar').map(r => (
-                  <div key={r.id} className="bg-white p-4 border border-slate-200 rounded-xl shadow-xs hover:border-slate-300 transition-all flex flex-col gap-2.5">
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="space-y-0.5 min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[10px] font-mono text-slate-450 bg-slate-100 px-1.5 py-0.5 rounded font-bold shrink-0" title="Folio del proyecto">
-                            {r.informacion_general_folio || 'S/F'}
-                          </span>
-                          <h4 className="text-sm font-bold text-slate-800 truncate">
-                            {r.informacion_general_proyecto || 'Sin Nombre'}
-                          </h4>
-                        </div>
-                        <p className="text-xs font-semibold text-slate-500">
-                          {r.informacion_general_cliente || 'Sin Cliente'}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          handleCardStageChange(r.id, assignTargetStage);
-                          setAssignModalOpen(false);
-                        }}
-                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer active:scale-95 shrink-0"
-                      >
-                        Asignar
-                      </button>
-                    </div>
-
-                    {r.notas_comerciales && r.notas_comerciales.trim() && (
-                      <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed italic bg-slate-50 p-2 rounded-lg border border-slate-100">
-                        {r.notas_comerciales}
-                      </p>
-                    )}
-
-                    <div className="flex items-center justify-between border-t border-dashed border-slate-150 pt-2.5 text-xs text-slate-600">
-                      <div className="flex items-center gap-2.5">
-                        <span>
-                          Subtotal: <strong className="font-bold text-slate-700">${(r.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {r.informacion_general_moneda || 'USD'}</strong>
-                        </span>
-                        <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
-                        <span>
-                          Total: <strong className="font-bold text-slate-900">${(r.total_general_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {r.informacion_general_moneda || 'USD'}</strong>
-                        </span>
-                      </div>
-
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim().startsWith('http')) {
-                            window.open(r.informacion_general_link_cotizacion.trim(), '_blank');
-                          } else {
-                            setPdfPromptRecord(r);
-                            setPdfPromptOpen(true);
-                          }
-                        }}
-                        title={r.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
-                        className={`px-2 py-1 border rounded-lg transition-all flex items-center gap-1 font-bold text-[10.5px] cursor-pointer ${
-                          r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim()
-                            ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-650 active:scale-95'
-                            : 'border-slate-200 bg-white text-slate-405 hover:bg-slate-50 active:scale-95'
-                        }`}
-                      >
-                        <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
-                        <span>PDF</span>
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
+              </div>
             </div>
-            <footer className="bg-white p-4 border-t border-slate-200 flex justify-end">
-              <button 
-                onClick={() => setAssignModalOpen(false)}
-                className="px-4 py-2 hover:bg-slate-100 text-slate-600 font-bold text-xs rounded-lg transition-colors border border-transparent hover:border-slate-300"
-              >
-                Cerrar
-              </button>
-            </footer>
+
+            {(() => {
+              const unassignedRecords = records.filter(r => kanbanMeta[r.id]?.stage === 'Sin Asignar');
+              
+              const filtered = unassignedRecords.filter(r => {
+                // 1. Text Search Filter
+                if (assignModalSearch.trim() !== '') {
+                  const q = assignModalSearch.toLowerCase().trim();
+                  const folio = (r.informacion_general_folio || '').toLowerCase();
+                  const name = (r.informacion_general_proyecto || '').toLowerCase();
+                  const client = (r.informacion_general_cliente || '').toLowerCase();
+                  if (!folio.includes(q) && !name.includes(q) && !client.includes(q)) {
+                    return false;
+                  }
+                }
+
+                // 2. Temperature Filter
+                if (assignModalTempFilter !== 'All') {
+                  const temp = getTemperature(r) || 'Cool';
+                  if (temp !== assignModalTempFilter) {
+                    return false;
+                  }
+                }
+                return true;
+              });
+
+              const allFilteredSelected = filtered.length > 0 && filtered.every(r => selectedAssignIds.includes(r.id));
+              const someFilteredSelected = filtered.length > 0 && filtered.some(r => selectedAssignIds.includes(r.id)) && !allFilteredSelected;
+
+              return (
+                <>
+                  {filtered.length > 0 && (
+                    <div className="bg-slate-100/75 border-b border-slate-200 px-6 py-2.5 flex items-center justify-between text-xs shrink-0 select-none">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                          checked={allFilteredSelected}
+                          ref={el => {
+                            if (el) {
+                              el.indeterminate = someFilteredSelected;
+                            }
+                          }}
+                          onChange={() => {
+                            if (allFilteredSelected) {
+                              // Deselect all filtered
+                              const filteredIds = filtered.map(r => r.id);
+                              setSelectedAssignIds(prev => prev.filter(id => !filteredIds.includes(id)));
+                            } else {
+                              // Select all filtered
+                              const filteredIds = filtered.map(r => r.id);
+                              setSelectedAssignIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+                            }
+                          }}
+                        />
+                        <span className="font-bold text-slate-700">
+                          {selectedAssignIds.length > 0 
+                            ? `${selectedAssignIds.length} seleccionados` 
+                            : `Seleccionar todos (${filtered.length})`}
+                        </span>
+                      </label>
+
+                      {selectedAssignIds.length > 0 && (
+                        <button
+                          onClick={() => setSelectedAssignIds([])}
+                          className="text-xs font-bold text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                        >
+                          Deseleccionar todos
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="p-4 overflow-y-auto bg-slate-50 flex-1 space-y-2">
+                    {unassignedRecords.length === 0 ? (
+                      <div className="text-sm text-center text-slate-400 py-6">
+                        No hay proyectos nuevos o sin asignar. Puedes crear uno nuevo desde la vista de lista.
+                      </div>
+                    ) : filtered.length === 0 ? (
+                      <div className="text-sm text-center text-slate-400 py-8 bg-white rounded-xl border border-dashed border-slate-200">
+                        <p className="font-bold text-slate-500">Ningún proyecto coincide con los filtros</p>
+                        <button 
+                          onClick={() => { setAssignModalSearch(''); setAssignModalTempFilter('All'); }} 
+                          className="mt-2 text-xs text-blue-600 hover:underline font-bold cursor-pointer"
+                        >
+                          Limpiar todos los filtros
+                        </button>
+                      </div>
+                    ) : (
+                      filtered.map(r => {
+                        const currentTemp = getTemperature(r);
+                        const isSelected = selectedAssignIds.includes(r.id);
+
+                        return (
+                          <div 
+                            key={r.id} 
+                            onClick={() => {
+                              setSelectedAssignIds(prev => 
+                                prev.includes(r.id) ? prev.filter(id => id !== r.id) : [...prev, r.id]
+                              );
+                            }}
+                            className={`p-4 border rounded-xl shadow-xs hover:border-slate-350 transition-all flex flex-col gap-2.5 cursor-pointer select-none ${
+                              isSelected 
+                                ? 'bg-blue-50/40 border-blue-400 ring-2 ring-blue-100' 
+                                : 'bg-white border-slate-200'
+                            }`}
+                          >
+                            <div className="flex justify-between items-start gap-4">
+                              <div className="flex gap-3 items-start min-w-0 flex-1">
+                                {/* Custom Checkbox UI element */}
+                                <div 
+                                  className={`w-4.5 h-4.5 mt-0.5 rounded border flex items-center justify-center shrink-0 transition-all ${
+                                    isSelected 
+                                      ? 'bg-blue-600 border-blue-600 text-white' 
+                                      : 'border-slate-300 bg-slate-50'
+                                  }`}
+                                >
+                                  {isSelected && <Check className="w-3.5 h-3.5 stroke-[3.5]" />}
+                                </div>
+
+                                <div className="space-y-0.5 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[10px] font-mono text-slate-450 bg-slate-100 px-1.5 py-0.5 rounded font-bold shrink-0" title="Folio del proyecto">
+                                      {r.informacion_general_folio || 'S/F'}
+                                    </span>
+                                    <h4 className="text-sm font-bold text-slate-800 truncate">
+                                      {r.informacion_general_proyecto || 'Sin Nombre'}
+                                    </h4>
+                                  </div>
+                                  
+                                  {/* Client row with level/status info right-aligned next to it */}
+                                  <div className="flex items-center justify-between gap-2 mt-1">
+                                    <p className="text-xs font-semibold text-slate-500 truncate">
+                                      {r.informacion_general_cliente || 'Sin Cliente'}
+                                    </p>
+                                    <div className="shrink-0 scale-90 origin-right">
+                                      {renderTemperatureBadge(currentTemp)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCardStageChange(r.id, assignTargetStage);
+                                  setAssignModalOpen(false);
+                                }}
+                                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors cursor-pointer active:scale-95 shrink-0"
+                                title="Asignar este proyecto de forma individual inmediatamente"
+                              >
+                                Asignar ya
+                              </button>
+                            </div>
+
+                            {r.notas_comerciales && r.notas_comerciales.trim() && (
+                              <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed italic bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                {r.notas_comerciales}
+                              </p>
+                            )}
+
+                            <div className="flex items-center justify-between border-t border-dashed border-slate-150 pt-2.5 text-xs text-slate-650">
+                              <div className="flex items-center gap-2.5">
+                                <span>
+                                  Subtotal: <strong className="font-bold text-slate-700">${(r.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {r.informacion_general_moneda || 'USD'}</strong>
+                                </span>
+                              </div>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim().startsWith('http')) {
+                                    window.open(r.informacion_general_link_cotizacion.trim(), '_blank');
+                                  } else {
+                                    setPdfPromptRecord(r);
+                                    setPdfPromptOpen(true);
+                                  }
+                                }}
+                                title={r.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
+                                className={`px-2 py-1 border rounded-lg transition-all flex items-center gap-1 font-bold text-[10.5px] cursor-pointer ${
+                                  r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion.trim()
+                                    ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-650 active:scale-95'
+                                    : 'border-slate-200 bg-white text-slate-405 hover:bg-slate-50 active:scale-95'
+                                }`}
+                              >
+                                <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
+                                <span>PDF</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <footer className="bg-white p-4 border-t border-slate-200 flex justify-between items-center shrink-0">
+                    <div className="text-xs text-slate-505 font-semibold ml-2">
+                      {selectedAssignIds.length > 0 ? (
+                        <span className="text-blue-600">
+                          🔥 {selectedAssignIds.length} seleccionados
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">Haz clic en las tarjetas para seleccionar múltiples</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => setAssignModalOpen(false)}
+                        className="px-4 py-2 hover:bg-slate-100 text-slate-600 font-bold text-xs rounded-lg transition-all border border-transparent hover:border-slate-300 cursor-pointer"
+                      >
+                        Cerrar
+                      </button>
+                      {selectedAssignIds.length > 0 && (
+                        <button
+                          onClick={() => {
+                            handleBulkStageChange(selectedAssignIds, assignTargetStage);
+                            setAssignModalOpen(false);
+                          }}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition-all cursor-pointer shadow-3xs active:scale-95 flex items-center gap-1.5"
+                        >
+                          <span>Asignar {selectedAssignIds.length} seleccionados</span>
+                        </button>
+                      )}
+                    </div>
+                  </footer>
+                </>
+              );
+            })()}
           </div>
         </div>,
         document.getElementById('root')!
