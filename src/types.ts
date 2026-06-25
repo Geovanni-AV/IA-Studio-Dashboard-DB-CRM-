@@ -1,5 +1,14 @@
 export type UserRole = 'Admin' | 'Vendedor' | 'Solo Lectura';
 
+export interface UserAccount {
+  id: string;
+  email: string;
+  nombre: string;
+  rol: UserRole;
+  estado: 'active' | 'pending' | 'rejected';
+  created_at: string;
+}
+
 export interface FollowupEntry {
   id: string;
   fecha: string; // YYYY-MM-DD
@@ -59,4 +68,28 @@ export interface Contact {
   email: string;
   telefono: string;
   esEnlaceComercial: boolean; // Previene pérdidas y optimiza respuestas
+  
+  // Campos de localización, tipo y organización para la tabla "contactos" en Supabase
+  tipo?: string;
+  organizacion?: string;
+  prefijoSufijo?: string;
+  pais?: string;
+  estado?: string;
+  ciudad?: string;
+  direccion?: string;
+  nombreUbicacion?: string;
+  empresa?: string;
+}
+
+export interface PurchaseOrder {
+  id: string;              // Base 1-based index or string UUID representation
+  folioOC: string;         // e.g. "OC-BIMBO-990-23"
+  linkOC: string;          // Google Drive PDF hyperlink
+  fechaInicio: string;     // YYYY-MM-DD project launch date
+  instalacionIncluida: boolean; // physical deployment included flag
+  monto: number;           // formal general total numeric amount
+  moneda: 'USD' | 'MXN';   // transaction currency
+  cliente: string;         // customer name
+  proyecto: string;        // project name/description
+  folioRefCRM: string;     // referencing CRM Record folio
 }

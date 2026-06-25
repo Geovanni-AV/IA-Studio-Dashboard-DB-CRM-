@@ -250,9 +250,8 @@ interface SignInCardProps {
   onLoginSuccess: (email: string) => void;
 }
 
-const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
+  const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
   const [isHovered, setIsHovered] = useState(false);
-  const [isDemoHovered, setIsDemoHovered] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const clientId = '769103708552-r9ljosbra9hp8bk4l5sgm8h3j4mt77ii.apps.googleusercontent.com';
 
@@ -274,17 +273,11 @@ const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
       );
       
       if (!popup) {
-        setErrorMsg('El navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes o utilice el acceso rápido simulado de Google Demo.');
+        setErrorMsg('El navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes en su navegador para poder iniciar sesión con Google.');
       }
     } catch (e: any) {
       setErrorMsg(`Error al abrir ventana de Google Auth: ${e.message || e}`);
     }
-  };
-
-  const handleMockGoogleLogin = () => {
-    setErrorMsg("");
-    // Log in with the preloaded Google Administrator email
-    onLoginSuccess("geovanni@verse-technology.com");
   };
   
   return (
@@ -430,37 +423,6 @@ const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
                 </button>
               </motion.div>
 
-              {/* Demo Sandbox Bypass Access (Handles iframe/popup restrictions gracefully) */}
-              <div className="relative flex py-2 items-center">
-                <div className="flex-grow border-t border-gray-200"></div>
-                <span className="flex-shrink mx-4 text-gray-400 text-[10px] font-bold uppercase tracking-widest">o bien</span>
-                <div className="flex-grow border-t border-gray-200"></div>
-              </div>
-
-              <motion.div 
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                onHoverStart={() => setIsDemoHovered(true)}
-                onHoverEnd={() => setIsDemoHovered(false)}
-              >
-                <button
-                  type="button"
-                  onClick={handleMockGoogleLogin}
-                  className={cn(
-                    "w-full flex items-center justify-center gap-2 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 p-3 rounded-xl transition-all duration-200 text-xs font-bold shadow-sm",
-                    isDemoHovered ? "border-blue-400 text-blue-600" : ""
-                  )}
-                >
-                  <svg className="h-4 w-4 shrink-0 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-                  </svg>
-                  <span>Acceso Rápido con Google Demo</span>
-                </button>
-              </motion.div>
-
-              <p className="text-[10px] text-center text-gray-400 leading-normal pt-1 px-4">
-                * El Sandbox se inicializa con la cuenta <strong>geovanni@verse-technology.com</strong>. Puedes usar el botón de acceso rápido si estás trabajando dentro de un iFrame bloqueado temporalmente.
-              </p>
             </div>
           </motion.div>
         </div>

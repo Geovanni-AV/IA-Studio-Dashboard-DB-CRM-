@@ -113,22 +113,16 @@ export default function SyncSupabaseSection({
 
   // Save values to localStorage
   useEffect(() => {
-    if (isInfraAdmin) {
-      localStorage.setItem('verse_supabase_url', supabaseUrl);
-    }
-  }, [supabaseUrl, isInfraAdmin]);
+    localStorage.setItem('verse_supabase_url', supabaseUrl);
+  }, [supabaseUrl]);
 
   useEffect(() => {
-    if (isInfraAdmin) {
-      localStorage.setItem('verse_supabase_key', supabaseKey);
-    }
-  }, [supabaseKey, isInfraAdmin]);
+    localStorage.setItem('verse_supabase_key', supabaseKey);
+  }, [supabaseKey]);
 
   useEffect(() => {
-    if (isInfraAdmin) {
-      localStorage.setItem('verse_supabase_autosync', String(autoSync));
-    }
-  }, [autoSync, isInfraAdmin]);
+    localStorage.setItem('verse_supabase_autosync', String(autoSync));
+  }, [autoSync]);
 
   // UI state
   const [copied, setCopied] = useState(false);

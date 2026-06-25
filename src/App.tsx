@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { CRMRecord, Contact, AuditLog, UserRole } from './types';
+import { CRMRecord, Contact, AuditLog, UserRole, UserAccount, PurchaseOrder } from './types';
 import { INITIAL_RECORDS, INITIAL_CONTACTS, INITIAL_AUDIT_LOGS } from './mockData';
 import { pushToGoogleSheets } from './googleSheetsService';
 import { getMexicoCityDateTimeString, getMexicoCityTimeString } from './dateUtils';
@@ -13,7 +13,12 @@ import {
   pushAuditLogToSupabase,
   loadFromSupabase,
   bulkUploadToSupabase,
-  getResolvedCRMTableName
+  getResolvedCRMTableName,
+  loadUsersFromSupabase,
+  upsertUserToSupabase,
+  initializeDefaultUsers,
+  toValidUUID,
+  pushPurchaseOrderToSupabase
 } from './supabaseService';
 
 // Subcomponents
@@ -27,6 +32,7 @@ import AuditSection from './components/AuditSection';
 import SyncSettingsSection from './components/SyncSettingsSection';
 import SignInScreen from './components/ui/travel-connect-signin-1';
 import UserProfileSection from './components/UserProfileSection';
+import UserManagementSection from './components/UserManagementSection';
 
 // Icons
 import {
@@ -48,7 +54,9 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
-  Menu
+  Menu,
+  Lock,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function App() {
@@ -75,6 +83,11 @@ export default function App() {
     return local ? JSON.parse(local) : INITIAL_CONTACTS;
   });
 
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(() => {
+    const local = localStorage.getItem('verse_crm_pos');
+    return local ? JSON.parse(local) : [];
+  });
+
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
     const local = localStorage.getItem('verse_crm_audit');
     return local ? JSON.parse(local) : INITIAL_AUDIT_LOGS;
@@ -94,6 +107,134 @@ export default function App() {
     return localStorage.getItem('verse_is_logged_in') === 'true';
   });
 
+  const [dbUsers, setDbUsers] = useState<UserAccount[]>([]);
+  const [userStatus, setUserStatus] = useState<'active' | 'pending' | 'rejected' | 'not_logged_in' | 'loading'>('loading');
+
+  const checkUserAccess = async (email: string, fullName: string) => {
+    setUserStatus('loading');
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+
+    const lowerEmail = email.trim().toLowerCase();
+
+    // EXCEPCIÓN DE ACCESO INMEDIATO: El administrador principal (Geovanni)
+    // entra directamente como failsafe para evitar bloqueos si la base de datos tiene problemas.
+    if (lowerEmail === 'geovanni@verse-technology.com') {
+      setRole('Admin');
+      setUserStatus('active');
+      // Intentar cargar la lista de usuarios en segundo plano para el panel de administración
+      if (url && key) {
+        loadUsersFromSupabase(url, key).then(result => {
+          if (result.success) {
+            setDbUsers(result.users);
+          }
+        }).catch(err => console.warn("Error cargando usuarios para Admin:", err));
+      }
+      return;
+    }
+
+    if (!url || !key) {
+      // Offline / Local Simulation Mode
+      const localUsersStr = localStorage.getItem('verse_local_users') || '[]';
+      let localUsers: UserAccount[] = JSON.parse(localUsersStr);
+      setDbUsers(localUsers);
+
+      if (lowerEmail === 'geovanni@verse-technology.com') {
+        setRole('Admin');
+        setUserStatus('active');
+      } else if (lowerEmail === 'marisol@verse-technology.com') {
+        setRole('Solo Lectura');
+        setUserStatus('active');
+      } else if (lowerEmail === 'ruth.triana@verse-technology.com') {
+        setRole('Vendedor');
+        setUserStatus('active');
+      } else {
+        let found = localUsers.find(u => u.email === lowerEmail);
+        if (!found) {
+          found = {
+            id: toValidUUID(lowerEmail),
+            email: lowerEmail,
+            nombre: fullName,
+            rol: 'Solo Lectura',
+            estado: 'pending',
+            created_at: getMexicoCityDateTimeString()
+          };
+          localUsers.push(found);
+          localStorage.setItem('verse_local_users', JSON.stringify(localUsers));
+          setDbUsers(localUsers);
+          appendAuditLog('MODIFICACIÓN', `Nueva solicitud de acceso registrada para: ${lowerEmail} (Modo Local)`);
+        }
+        
+        if (found.estado === 'active') {
+          setRole(found.rol);
+          setUserStatus('active');
+        } else if (found.estado === 'rejected') {
+          setUserStatus('rejected');
+        } else {
+          setUserStatus('pending');
+        }
+      }
+      return;
+    }
+
+    try {
+      // Fetch user from Supabase with resilient default users setup
+      await initializeDefaultUsers(url, key);
+      const result = await loadUsersFromSupabase(url, key);
+
+      if (result.success) {
+        const dbUsers = result.users;
+        setDbUsers(dbUsers);
+        const found = dbUsers.find(u => u.email === lowerEmail);
+
+        if (found) {
+          if (found.estado === 'active') {
+            setRole(found.rol);
+            setUserStatus('active');
+          } else if (found.estado === 'rejected') {
+            setUserStatus('rejected');
+          } else {
+            setUserStatus('pending');
+          }
+        } else {
+          // Create new request with a strictly valid UUID to satisfy Supabase primary key constraint
+          const newReq: UserAccount = {
+            id: toValidUUID(lowerEmail),
+            email: lowerEmail,
+            nombre: fullName,
+            rol: 'Solo Lectura',
+            estado: 'pending',
+            created_at: getMexicoCityDateTimeString()
+          };
+          const ok = await upsertUserToSupabase(url, key, newReq);
+          if (ok) {
+            setUserStatus('pending');
+            appendAuditLog('MODIFICACIÓN', `Nueva solicitud de acceso registrada en Supabase para: ${lowerEmail}`, lowerEmail);
+          } else {
+            setUserStatus('pending');
+          }
+        }
+      } else {
+        throw new Error(result.message);
+      }
+    } catch (err) {
+      console.warn("Error verifying access in Supabase, using local fallback:", err);
+      // Failover logic
+      if (lowerEmail === 'geovanni@verse-technology.com') {
+        setRole('Admin');
+        setUserStatus('active');
+      } else if (lowerEmail === 'marisol@verse-technology.com') {
+        setRole('Solo Lectura');
+        setUserStatus('active');
+      } else if (lowerEmail === 'ruth.triana@verse-technology.com') {
+        setRole('Vendedor');
+        setUserStatus('active');
+      } else {
+        setUserStatus('pending');
+      }
+    }
+  };
+
   const handleLoginSuccess = (email: string) => {
     setIsAuthenticated(true);
     localStorage.setItem('verse_is_logged_in', 'true');
@@ -105,8 +246,9 @@ export default function App() {
     };
     setGoogleUser(profile);
     localStorage.setItem('verse_google_user', JSON.stringify(profile));
-    showToast(`¡Bienvenido, ${profile.name}! Sesión iniciada.`, 'success');
+    showToast(`¡Bienvenido, ${profile.name}! Validando credenciales...`, 'info');
     appendAuditLog('INICIO SESIÓN', `Usuario inició sesión exitosamente utilizando dirección: ${email}`, email);
+    checkUserAccess(email, profile.name);
   };
 
   // States for loaders and feedback notifications
@@ -118,6 +260,14 @@ export default function App() {
   const [googleToken, setGoogleToken] = useState<string>(() => {
     return localStorage.getItem('verse_sheet_token') || '';
   });
+
+  useEffect(() => {
+    if (googleUser && googleUser.email) {
+      checkUserAccess(googleUser.email, googleUser.name);
+    } else {
+      setUserStatus('not_logged_in');
+    }
+  }, []);
 
   const fetchGoogleProfile = async (token: string) => {
     try {
@@ -137,6 +287,9 @@ export default function App() {
         localStorage.setItem('verse_is_logged_in', 'true');
         showToast(`¡Conexión Google Exitosa! Bienvenido, ${profile.name}`, 'success');
         appendAuditLog('INICIO SESIÓN', `Usuario inició sesión de forma segura a través de Google Workspace OAuth (${profile.name}).`, profile.email);
+        
+        // Ejecutar inmediatamente la validación de acceso para bloquear/permitir según base de datos
+        await checkUserAccess(profile.email, profile.name);
       } else {
         console.warn('Token inválido o expirado en el API de Google.');
         appendAuditLog('ERROR', 'Intento de inicio de sesión de Google falló por token inválido o expirado.');
@@ -154,6 +307,7 @@ export default function App() {
     setGoogleUser(null);
     setGoogleToken('');
     setIsAuthenticated(false);
+    setUserStatus('not_logged_in');
     setActiveTab('Dashboard');
     localStorage.removeItem('verse_sheet_token');
     localStorage.removeItem('verse_google_user');
@@ -339,6 +493,10 @@ export default function App() {
   }, [contacts]);
 
   useEffect(() => {
+    localStorage.setItem('verse_crm_pos', JSON.stringify(purchaseOrders));
+  }, [purchaseOrders]);
+
+  useEffect(() => {
     localStorage.setItem('verse_crm_audit', JSON.stringify(auditLogs));
   }, [auditLogs]);
 
@@ -387,7 +545,7 @@ export default function App() {
 
     try {
       if (action === 'DELETE') {
-        const success = await deleteContactFromSupabase(url, key, contact.id);
+        const success = await deleteContactFromSupabase(url, key, contact.id, contact.email);
         if (success) {
           showToast(`Contacto ${contact.nombre} eliminado de Supabase`, 'success');
         } else {
@@ -484,6 +642,80 @@ export default function App() {
 
   if (!isAuthenticated || !googleUser) {
     return <SignInScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  if (userStatus === 'loading') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="w-10 h-10 border-2 border-t-transparent border-indigo-500 rounded-full animate-spin mb-4"></div>
+        <h2 className="text-base font-bold mb-1">Verificando Autorización de Acceso...</h2>
+        <p className="text-xs text-slate-400">Consultando estado del usuario en la base de datos de Verse Technology.</p>
+      </div>
+    );
+  }
+
+  if (userStatus === 'pending') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="max-w-md bg-slate-900 border border-amber-500/30 p-8 rounded-2xl shadow-xl space-y-4">
+          <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto border border-amber-500/20 animate-pulse">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold tracking-tight text-amber-400">Solicitud de Acceso en Proceso</h2>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            Tu solicitud para acceder a la plataforma está siendo revisada. Se te brindará el acceso una vez que tu usuario sea aprobado.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2 pt-2">
+            <button
+              onClick={() => checkUserAccess(googleUser.email, googleUser.name)}
+              className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Verificar Estado
+            </button>
+            <button
+              onClick={handleDisconnectGoogle}
+              className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              Cerrar Sesión
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (userStatus === 'rejected') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="max-w-md bg-slate-900 border border-rose-500/30 p-8 rounded-2xl shadow-xl space-y-4">
+          <div className="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-500/20">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold tracking-tight text-rose-400">Acceso Denegado</h2>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            Hola, <span className="font-bold text-white">{googleUser.name}</span> (<span className="text-rose-300">{googleUser.email}</span>). Tu solicitud de acceso ha sido rechazada por el administrador.
+          </p>
+          <div className="p-3 bg-slate-950 rounded-lg text-[11px] text-slate-400 border border-slate-800">
+            Si consideras que esto es un error o necesitas solicitar un cambio de estado, por favor contacta al administrador en <span className="text-rose-300">geovanni@verse-technology.com</span>.
+          </div>
+          <div className="flex gap-2 pt-2">
+            <button
+              onClick={() => checkUserAccess(googleUser.email, googleUser.name)}
+              className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              Reintentar Conexión
+            </button>
+            <button
+              onClick={handleDisconnectGoogle}
+              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              Cerrar Sesión
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -828,6 +1060,32 @@ export default function App() {
                 </button>
               )}
 
+              {role === 'Admin' && (
+                <button
+                  onClick={() => setActiveTab('UserManagement')}
+                  className={`w-full flex items-center ${
+                    isSidebarCollapsed ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                  } text-xs font-semibold rounded-md transition-all duration-300 ${
+                    activeTab === 'UserManagement'
+                      ? 'bg-slate-100 text-blue-700 font-bold shadow-3xs'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                  title={isSidebarCollapsed ? "Control de Usuarios" : undefined}
+                >
+                  <span className="flex items-center gap-2">
+                    <Users className="w-4 h-4 shrink-0 transition-transform duration-200" />
+                    {!isSidebarCollapsed && (
+                      <span className="animate-in fade-in duration-200 truncate">Control de Usuarios</span>
+                    )}
+                  </span>
+                  {!isSidebarCollapsed && dbUsers.filter(u => u.estado === 'pending').length > 0 && (
+                    <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold animate-pulse">
+                      {dbUsers.filter(u => u.estado === 'pending').length}
+                    </span>
+                  )}
+                </button>
+              )}
+
               <button
                 onClick={() => setActiveTab('SyncSettings')}
                 className={`w-full flex items-center ${
@@ -1140,6 +1398,13 @@ export default function App() {
                 role={role}
                 onChangeRole={(newRole) => setRole(newRole)}
                 onDisconnect={handleDisconnectGoogle}
+              />
+            )}
+
+            {activeTab === 'UserManagement' && role === 'Admin' && (
+              <UserManagementSection
+                role={role}
+                onShowAudit={appendAuditLog}
               />
             )}
           </div>
