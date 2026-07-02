@@ -254,28 +254,28 @@ export default function Dashboard({
   // Temperature aggregates
   const hotRecords = filteredRecords.filter(r => {
     const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel;
+    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
     return temp === 'Hot' || stage === 'Negociación';
   });
   const hotAmount = hotRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
   const warmRecords = filteredRecords.filter(r => {
     const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel;
+    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
     return temp === 'Warm' || stage === 'Cotizado';
   });
   const warmAmount = warmRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
   const coolRecords = filteredRecords.filter(r => {
     const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel;
+    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
     return temp === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!temp && !stage);
   });
   const coolAmount = coolRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
   const winRecords = filteredRecords.filter(r => {
     const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel;
+    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
     return temp === 'Win' || stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
   });
   const winAmount = winRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
@@ -432,19 +432,19 @@ export default function Dashboard({
 
     const hSum = qRecords.filter(r => {
       const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel;
+      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
       return t === 'Hot' || stage === 'Negociación';
     }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
     const wSum = qRecords.filter(r => {
       const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel;
+      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
       return t === 'Warm' || stage === 'Cotizado';
     }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
     const cSum = qRecords.filter(r => {
       const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel;
+      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
       return t === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!t && !stage);
     }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 

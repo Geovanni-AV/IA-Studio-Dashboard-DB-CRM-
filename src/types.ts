@@ -27,11 +27,11 @@ export interface CRMRecord {
   cliente_ubicacion: string | null; // Specific city/state (e.g. CDMX, Monterrey, New York)
   informacion_general_proyecto: string | null; // e.g., "Medición de Flujo Vapor"
   informacion_general_link_cotizacion: string | null; // Google Drive PDF link
-  total_hardware_cotizacion: number; // Supplies
-  total_servicios_cotizacion: number; // Support/Installation SERVICES
-  total_subtotal_cotizacion: number; // Hardware + Services
-  total_iva_cotizacion: number; // 16% of Subtotal
-  total_general_cotizacion: number; // Subtotal + IVA
+  total_hardware_cotizacion: number | null; // Supplies
+  total_servicios_cotizacion: number | null; // Support/Installation SERVICES
+  total_subtotal_cotizacion: number | null; // Hardware + Services
+  total_iva_cotizacion: number | null; // 16% of Subtotal
+  total_general_cotizacion: number | null; // Subtotal + IVA
   informacion_general_moneda: 'USD' | 'MXN'; // Contract default currency
   estado_proyecto?: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null; // Column 6
   status_proyecto?: 'Win' | 'Hot' | 'Warm' | 'Cool' | null; // Column 7
@@ -48,6 +48,12 @@ export interface CRMRecord {
   // Custom tracking for Obsolete or substituted ref
   sustituye_folio_anterior?: string | null; // Trazabilidad
   prioridad_nivel?: 'Win' | 'Hot' | 'Warm' | 'Cool' | null;
+  
+  // Campos independientes solicitados para el Kanban
+  etapa?: string | null;
+  nivel_termo?: string | null;
+  prioridad?: number | null;
+  estado?: string | null;
 }
 
 export interface AuditLog {

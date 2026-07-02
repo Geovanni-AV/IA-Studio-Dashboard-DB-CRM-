@@ -63,7 +63,7 @@ let knownAuditLogsColumns: string[] = [];
 let knownUsuariosColumns: string[] = [];
 let knownOCTableColumns: string[] = [];
 
-const CRM_TABLE_CANDIDATES = ['DB CRM', 'DB_CRM', 'db_crm', 'crm_records'];
+const CRM_TABLE_CANDIDATES = ['DB CRM'];
 const CONTACTS_TABLE_CANDIDATES = ['contactos', 'Contactos', 'contacts', 'CONTACTS'];
 const AUDIT_LOGS_TABLE_CANDIDATES = ['audit_logs', 'bitacora', 'AUDIT_LOGS', 'audit_log'];
 const USUARIOS_TABLE_CANDIDATES = ['Usuarios', 'usuarios', 'users', 'USERS'];
@@ -273,7 +273,9 @@ export function getSupabaseClient(url: string, key: string): SupabaseClient | nu
     cachedKey = cleanKey;
     cachedClient = createClient(cleanUrl, cleanKey, {
       auth: {
-        persistSession: false
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
       }
     });
     return cachedClient;
@@ -437,16 +439,24 @@ function getFlexibleValue(r: any, keys: string[], fallback: any = ''): any {
 }
 
 export function mapRawCRMRecord(r: any): CRMRecord {
-  const hardware = Number(getFlexibleValue(r, ['total_hardware_cotizacion', 'hardware', 'Hardware'])) || 0;
-  const servicios = Number(getFlexibleValue(r, ['total_servicios_cotizacion', 'servicios', 'servicio', 'Servicios'])) || 0;
-  
-  const dbSubtotal = Number(getFlexibleValue(r, ['total_subtotal_cotizacion', 'subtotal', 'Subtotal'])) || 0;
-  const dbIva = Number(getFlexibleValue(r, ['total_iva_cotizacion', 'iva', 'IVA'])) || 0;
-  const dbGeneral = Number(getFlexibleValue(r, ['total_general_cotizacion', 'total', 'Total', 'general_cotizacion'])) || 0;
+  const rawHw = getFlexibleValue(r, ['total_hardware_cotizacion', 'hardware', 'Hardware']);
+  const rawServ = getFlexibleValue(r, ['total_servicios_cotizacion', 'servicios', 'servicio', 'Servicios']);
 
-  const subtotal = dbSubtotal > 0 ? dbSubtotal : (hardware + servicios);
-  const iva = dbIva > 0 ? dbIva : parseFloat((subtotal * 0.16).toFixed(2));
-  const general = dbGeneral > 0 ? dbGeneral : parseFloat((subtotal + iva).toFixed(2));
+  const hardware = (rawHw === null || rawHw === undefined || String(rawHw).trim() === '') ? null : Number(rawHw);
+  const servicios = (rawServ === null || rawServ === undefined || String(rawServ).trim() === '') ? null : Number(rawServ);
+  
+  const rawSub = getFlexibleValue(r, ['total_subtotal_cotizacion', 'subtotal', 'Subtotal']);
+  const dbSubtotal = (rawSub === null || rawSub === undefined || String(rawSub).trim() === '') ? null : Number(rawSub);
+
+  const rawIva = getFlexibleValue(r, ['total_iva_cotizacion', 'iva', 'IVA']);
+  const dbIva = (rawIva === null || rawIva === undefined || String(rawIva).trim() === '') ? null : Number(rawIva);
+
+  const rawGen = getFlexibleValue(r, ['total_general_cotizacion', 'total', 'Total', 'general_cotizacion']);
+  const dbGeneral = (rawGen === null || rawGen === undefined || String(rawGen).trim() === '') ? null : Number(rawGen);
+
+  const subtotal = dbSubtotal !== null ? dbSubtotal : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
+  const iva = dbIva !== null ? dbIva : parseFloat((subtotal * 0.16).toFixed(2));
+  const general = dbGeneral !== null ? dbGeneral : parseFloat((subtotal + iva).toFixed(2));
 
   const rawAcciones = getFlexibleValue(r, ['acciones_seguimiento', 'acciones', 'acciones_seguimiento'], []);
   let acciones_parsed: any[] = [];
@@ -535,7 +545,16 @@ export function mapRawCRMRecord(r: any): CRMRecord {
     notas_comerciales: getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales']) || null,
     acciones_seguimiento: acciones_parsed,
     sustituye_folio_anterior: getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior']) || null,
-    prioridad_nivel: finalStatusNivel
+    prioridad_nivel: finalStatusNivel,
+
+    // Campos independientes mapeados de la base de datos
+    etapa: getFlexibleValue(r, ['etapa', 'Etapa', 'kanban_stage', 'stage']) || null,
+    nivel_termo: getFlexibleValue(r, ['nivel_termo', 'nivel_termo', 'nivel', 'nivel_termo_proyecto']) || finalStatusNivel,
+    prioridad: (() => {
+      const pVal = getFlexibleValue(r, ['prioridad', 'Prioridad', 'order', 'orden', 'posicion']);
+      return (pVal !== null && pVal !== undefined && String(pVal).trim() !== '') ? Number(pVal) : 0;
+    })(),
+    estado: getFlexibleValue(r, ['estado', 'Estado', 'estado_proyecto', 'estado_proyecto']) || finalEstado
   };
 }
 
@@ -816,6 +835,20 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
   let fetchedViaRest = false;
   let restErrorMsg = '';
 
+  const client = getSupabaseClient(url, key);
+  let bearerToken = cleanKey;
+  if (client) {
+    try {
+      const { data: { session } } = await client.auth.getSession();
+      if (session && session.access_token) {
+        bearerToken = session.access_token;
+        console.log("Using active Supabase Auth user session JWT token for direct REST requests.");
+      }
+    } catch (e) {
+      console.warn("Failed to check active Supabase Auth session, using anon key fallback:", e);
+    }
+  }
+
   // 1. INTENTAR PRIMERO VÍA REST HTTP DIRECTA (Inmune a bloqueadores de cookies/GoTrue de iframes)
   let crmOk = false;
   let conOk = false;
@@ -825,7 +858,7 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
   try {
     const headers = {
       'apikey': cleanKey,
-      'Authorization': `Bearer ${cleanKey}`,
+      'Authorization': `Bearer ${bearerToken}`,
       'Content-Type': 'application/json'
     };
 
@@ -1072,7 +1105,6 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
     });
 
     const wonRecords = records.filter(r => 
-      r.status_proyecto === 'Cerrado Ganado' || 
       r.estado_proyecto === 'Cerrado Ganado'
     );
 
@@ -1222,11 +1254,15 @@ export async function pushCRMRecordToSupabase(
   if (!client) return false;
 
   try {
-    const hardware = Number(record.total_hardware_cotizacion) || 0;
-    const servicios = Number(record.total_servicios_cotizacion) || 0;
-    const subtotal = hardware + servicios;
-    const iva = parseFloat((subtotal * 0.16).toFixed(2));
-    const general = parseFloat((subtotal + iva).toFixed(2));
+    const rawHw = record.total_hardware_cotizacion;
+    const rawServ = record.total_servicios_cotizacion;
+
+    const hardware = (rawHw === null || rawHw === undefined || String(rawHw).trim() === '') ? null : Number(rawHw);
+    const servicios = (rawServ === null || rawServ === undefined || String(rawServ).trim() === '') ? null : Number(rawServ);
+
+    const subtotal = (hardware === null && servicios === null) ? null : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
+    const iva = subtotal === null ? null : parseFloat((subtotal * 0.16).toFixed(2));
+    const general = subtotal === null ? null : parseFloat((subtotal + (iva !== null ? iva : 0)).toFixed(2));
 
     const validUUID = toValidUUID(record.id);
 
@@ -1254,10 +1290,17 @@ export async function pushCRMRecordToSupabase(
       fecha_inicio_proyecto: record.fecha_inicio_proyecto || null,
       informacion_general_instalacion_incluida: record.informacion_general_instalacion_incluida ?? null,
       notas_comerciales: record.notas_comerciales,
-      acciones_seguimiento: record.acciones_seguimiento,
+      acciones_seguimiento: Array.isArray(record.acciones_seguimiento) ? JSON.stringify(record.acciones_seguimiento) : record.acciones_seguimiento,
       sustituye_folio_anterior: record.sustituye_folio_anterior || null,
-      prioridad_nivel: record.status_proyecto || null
+      etapa: record.etapa || null,
+      nivel_termo: record.nivel_termo || record.status_proyecto || null,
+      prioridad: record.prioridad !== undefined && record.prioridad !== null ? Number(record.prioridad) : 0,
+      estado: record.estado || record.estado_proyecto || null
     };
+
+    if (knownCRMTableColumns.includes('prioridad_nivel')) {
+      standardPayload.prioridad_nivel = record.status_proyecto || null;
+    }
 
     const shortPayload: any = {
       id: validUUID,
@@ -1285,7 +1328,10 @@ export async function pushCRMRecordToSupabase(
       notas: record.notas_comerciales,
       acciones: record.acciones_seguimiento,
       sustituye: record.sustituye_folio_anterior || null,
-      prioridad: record.status_proyecto || null
+      prioridad: record.prioridad !== undefined && record.prioridad !== null ? Number(record.prioridad) : 0,
+      etapa: record.etapa || null,
+      nivel_termo: record.nivel_termo || record.status_proyecto || null,
+      estado: record.estado || record.estado_proyecto || null
     };
 
     const payload: any = { id: validUUID };
@@ -1697,10 +1743,17 @@ export async function bulkUploadToSupabase(
         fecha_inicio_proyecto: rec.fecha_inicio_proyecto || null,
         informacion_general_instalacion_incluida: rec.informacion_general_instalacion_incluida ?? null,
         notas_comerciales: rec.notas_comerciales,
-        acciones_seguimiento: rec.acciones_seguimiento,
+        acciones_seguimiento: Array.isArray(rec.acciones_seguimiento) ? JSON.stringify(rec.acciones_seguimiento) : rec.acciones_seguimiento,
         sustituye_folio_anterior: rec.sustituye_folio_anterior || null,
-        prioridad_nivel: rec.status_proyecto || null
+        etapa: rec.etapa || null,
+        nivel_termo: rec.nivel_termo || rec.status_proyecto || null,
+        prioridad: rec.prioridad !== undefined && rec.prioridad !== null ? Number(rec.prioridad) : 0,
+        estado: rec.estado || rec.estado_proyecto || null
       };
+
+      if (knownCRMTableColumns.includes('prioridad_nivel')) {
+        standardPayload.prioridad_nivel = rec.status_proyecto || null;
+      }
 
       const shortPayload: any = {
         id: validUUID,
@@ -1726,9 +1779,12 @@ export async function bulkUploadToSupabase(
         fecha_inicio: rec.fecha_inicio_proyecto || null,
         instalacion: rec.informacion_general_instalacion_incluida ?? null,
         notas: rec.notas_comerciales,
-        acciones: rec.acciones_seguimiento,
+        acciones: Array.isArray(rec.acciones_seguimiento) ? JSON.stringify(rec.acciones_seguimiento) : rec.acciones_seguimiento,
         sustituye: rec.sustituye_folio_anterior || null,
-        prioridad: rec.status_proyecto || null
+        prioridad: rec.prioridad !== undefined && rec.prioridad !== null ? Number(rec.prioridad) : 0,
+        etapa: rec.etapa || null,
+        nivel_termo: rec.nivel_termo || rec.status_proyecto || null,
+        estado: rec.estado || rec.estado_proyecto || null
       };
 
       const payload: any = { id: validUUID };
@@ -1953,33 +2009,57 @@ export async function bulkUploadToSupabase(
 
 export const SUPABASE_SQL_INSTRUCTIONS = `-- COPIA Y PEGA ESTE SCRIPT EN EL EDITOR SQL (SQL EDITOR) DE TU PROYECTO SUPABASE
 
--- 1. Tabla de Expedientes CRM
-create table if not exists crm_records (
-  id text primary key,
-  informacion_general_folio text,
+-- MIGRACIÓN DE COMPATIBILIDAD (Si ya tienes las tablas creadas, ejecuta esto primero):
+-- ALTER TABLE "DB CRM" ADD COLUMN IF NOT EXISTS etapa text;
+-- ALTER TABLE "DB CRM" ADD COLUMN IF NOT EXISTS nivel_termo text;
+-- ALTER TABLE "DB CRM" ADD COLUMN IF NOT EXISTS prioridad integer DEFAULT 0;
+-- ALTER TABLE "DB CRM" ADD COLUMN IF NOT EXISTS estado text;
+
+-- 1. Tabla de Expedientes CRM ("DB CRM")
+create table if not exists "DB CRM" (
+  id uuid primary key default gen_random_uuid(),
   fecha_registro text,
-  informacion_general_cliente text,
-  informacion_general_planta text,
-  cliente_pais text,
-  cliente_ubicacion text,
-  informacion_general_proyecto text,
-  informacion_general_link_cotizacion text,
-  total_hardware_cotizacion numeric,
-  total_servicios_cotizacion numeric,
-  total_subtotal_cotizacion numeric,
-  total_iva_cotizacion numeric,
-  total_general_cotizacion numeric,
-  informacion_general_moneda text,
   status_proyecto text,
   folio_orden_compra text,
   link_orden_compra text,
-  fecha_inicio_proyecto text,
+  informacion_general_folio text,
+  informacion_general_link_cotizacion text,
+  informacion_general_fecha text,
+  informacion_general_cliente text,
+  informacion_general_planta text,
+  cliente_ubicacion text,
+  cliente_pais text,
+  informacion_general_nombre_archivo text,
+  informacion_general_proyecto text,
+  informacion_general_moneda text,
+  informacion_general_tiempo_entrega text,
+  informacion_general_garantia text,
+  informacion_general_incoterm text,
   informacion_general_instalacion_incluida boolean,
+  cotizacion_sustituye_a text,
+  condicionantes_comerciales text,
+  contacto_nombre text,
+  contacto_puesto text,
+  contacto_email text,
+  contacto_telefono text,
+  total_subtotal_cotizacion float8,
+  total_iva_cotizacion float8,
+  total_general_cotizacion float8,
+  total_hardware_cotizacion float8,
+  total_servicios_cotizacion float8,
+  numero_partidas int8,
   notas_comerciales text,
-  acciones_seguimiento jsonb,
-  sustituye_folio_anterior text,
-  prioridad_nivel text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  acciones_seguimiento text,
+  fecha_inicio_proyecto text,
+  _system_fileId text,
+  __partidas jsonb,
+  estado_proyecto text,
+
+  -- Nuevos campos para funcionamiento del Kanban
+  etapa text,
+  nivel_termo text,
+  prioridad integer default 0,
+  estado text
 );
 
 -- 2. Tabla de Contactos
@@ -2047,76 +2127,157 @@ create table if not exists audit_logs (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Habilitar Políticas Permisivas para Demostración del Sandbox
-alter table crm_records enable row level security;
-alter table contacts enable row level security;
-alter table audit_logs enable row level security;
+-- 4. Tabla de Órdenes de Compra (DB_OC o DB OC)
+create table if not exists "DB_OC" (
+  id bigint primary key,
+  moneda text,
+  folio_oc text,
+  link_oc text,
+  fecha_inicio text,
+  instalacion boolean,
+  monto numeric,
+  cliente text,
+  proyecto text,
+  folio_ref_crm text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
 
--- SI TU TABLA DE EXPEDIENTES SE LLAMA "DB CRM" (CON ESPACIO PRINCIPAL):
+create table if not exists "DB OC" (
+  id bigint primary key,
+  moneda text,
+  folio_oc text,
+  link_oc text,
+  fecha_inicio text,
+  instalacion boolean,
+  monto numeric,
+  cliente text,
+  proyecto text,
+  folio_ref_crm text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 5. Tabla de Gestión de Usuarios y Accesos (Usuarios o usuarios)
+create table if not exists "Usuarios" (
+  id text primary key,
+  correo text unique not null,
+  nombre text,
+  rol text,
+  estado text,
+  "fechaRegistro" text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+create table if not exists usuarios (
+  id text primary key,
+  correo text unique not null,
+  nombre text,
+  rol text,
+  estado text,
+  "fechaRegistro" text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+
+-- ========================================================
+-- HABILITAR SEGURIDAD (RLS) Y CREAR POLÍTICAS PERMISIVAS
+-- ========================================================
+
+-- Tabla con espacio: "DB CRM"
 alter table if exists "DB CRM" enable row level security;
-
--- Limpiar políticas viejas si ya existen para evitar errores al re-ejecutar
-drop policy if exists "Permiso lectura libre" on crm_records;
-drop policy if exists "Permiso escritura libre" on crm_records;
-drop policy if exists "Permiso edicion libre" on crm_records;
-drop policy if exists "Permiso borrado libre" on crm_records;
-
-create policy "Permiso lectura libre" on crm_records for select using (true);
-create policy "Permiso escritura libre" on crm_records for insert with check (true);
-create policy "Permiso edicion libre" on crm_records for update using (true);
-create policy "Permiso borrado libre" on crm_records for delete using (true);
-
--- Políticas para la tabla con espacio "DB CRM":
 drop policy if exists "Permiso lectura libre" on "DB CRM";
 drop policy if exists "Permiso escritura libre" on "DB CRM";
 drop policy if exists "Permiso edicion libre" on "DB CRM";
 drop policy if exists "Permiso borrado libre" on "DB CRM";
-
 create policy "Permiso lectura libre" on "DB CRM" for select using (true);
 create policy "Permiso escritura libre" on "DB CRM" for insert with check (true);
 create policy "Permiso edicion libre" on "DB CRM" for update using (true);
 create policy "Permiso borrado libre" on "DB CRM" for delete using (true);
 
+-- Tabla: contacts
+alter table contacts enable row level security;
 drop policy if exists "Permiso lectura libre" on contacts;
 drop policy if exists "Permiso escritura libre" on contacts;
 drop policy if exists "Permiso edicion libre" on contacts;
 drop policy if exists "Permiso borrado libre" on contacts;
-
 create policy "Permiso lectura libre" on contacts for select using (true);
 create policy "Permiso escritura libre" on contacts for insert with check (true);
 create policy "Permiso edicion libre" on contacts for update using (true);
 create policy "Permiso borrado libre" on contacts for delete using (true);
 
--- Políticas alternas si tu tabla de contactos se llama "Contactos" (con C mayúscula) o "contactos" (con c minúscula):
+-- Tabla con C mayúscula: "Contactos"
 alter table if exists "Contactos" enable row level security;
 drop policy if exists "Permiso lectura libre" on "Contactos";
 drop policy if exists "Permiso escritura libre" on "Contactos";
 drop policy if exists "Permiso edicion libre" on "Contactos";
 drop policy if exists "Permiso borrado libre" on "Contactos";
-
 create policy "Permiso lectura libre" on "Contactos" for select using (true);
 create policy "Permiso escritura libre" on "Contactos" for insert with check (true);
 create policy "Permiso edicion libre" on "Contactos" for update using (true);
 create policy "Permiso borrado libre" on "Contactos" for delete using (true);
 
+-- Tabla con c minúscula: contactos
 alter table if exists contactos enable row level security;
 drop policy if exists "Permiso lectura libre" on contactos;
 drop policy if exists "Permiso escritura libre" on contactos;
 drop policy if exists "Permiso edicion libre" on contactos;
 drop policy if exists "Permiso borrado libre" on contactos;
-
 create policy "Permiso lectura libre" on contactos for select using (true);
 create policy "Permiso escritura libre" on contactos for insert with check (true);
 create policy "Permiso edicion libre" on contactos for update using (true);
 create policy "Permiso borrado libre" on contactos for delete using (true);
 
+-- Tabla: audit_logs
+alter table audit_logs enable row level security;
 drop policy if exists "Permiso lectura libre" on audit_logs;
 drop policy if exists "Permiso escritura libre" on audit_logs;
 drop policy if exists "Permiso edicion libre" on audit_logs;
 drop policy if exists "Permiso borrado libre" on audit_logs;
-
 create policy "Permiso lectura libre" on audit_logs for select using (true);
 create policy "Permiso escritura libre" on audit_logs for insert with check (true);
 create policy "Permiso edicion libre" on audit_logs for update using (true);
 create policy "Permiso borrado libre" on audit_logs for delete using (true);
+
+-- Tabla: "DB_OC"
+alter table if exists "DB_OC" enable row level security;
+drop policy if exists "Permiso lectura libre" on "DB_OC";
+drop policy if exists "Permiso escritura libre" on "DB_OC";
+drop policy if exists "Permiso edicion libre" on "DB_OC";
+drop policy if exists "Permiso borrado libre" on "DB_OC";
+create policy "Permiso lectura libre" on "DB_OC" for select using (true);
+create policy "Permiso escritura libre" on "DB_OC" for insert with check (true);
+create policy "Permiso edicion libre" on "DB_OC" for update using (true);
+create policy "Permiso borrado libre" on "DB_OC" for delete using (true);
+
+-- Tabla: "DB OC"
+alter table if exists "DB OC" enable row level security;
+drop policy if exists "Permiso lectura libre" on "DB OC";
+drop policy if exists "Permiso escritura libre" on "DB OC";
+drop policy if exists "Permiso edicion libre" on "DB OC";
+drop policy if exists "Permiso borrado libre" on "DB OC";
+create policy "Permiso lectura libre" on "DB OC" for select using (true);
+create policy "Permiso escritura libre" on "DB OC" for insert with check (true);
+create policy "Permiso edicion libre" on "DB OC" for update using (true);
+create policy "Permiso borrado libre" on "DB OC" for delete using (true);
+
+-- Tabla: "Usuarios"
+alter table if exists "Usuarios" enable row level security;
+drop policy if exists "Permiso lectura libre" on "Usuarios";
+drop policy if exists "Permiso escritura libre" on "Usuarios";
+drop policy if exists "Permiso edicion libre" on "Usuarios";
+drop policy if exists "Permiso borrado libre" on "Usuarios";
+create policy "Permiso lectura libre" on "Usuarios" for select using (true);
+create policy "Permiso escritura libre" on "Usuarios" for insert with check (true);
+create policy "Permiso edicion libre" on "Usuarios" for update using (true);
+create policy "Permiso borrado libre" on "Usuarios" for delete using (true);
+
+-- Tabla: usuarios
+alter table if exists usuarios enable row level security;
+drop policy if exists "Permiso lectura libre" on usuarios;
+drop policy if exists "Permiso escritura libre" on usuarios;
+drop policy if exists "Permiso edicion libre" on usuarios;
+drop policy if exists "Permiso borrado libre" on usuarios;
+create policy "Permiso lectura libre" on usuarios for select using (true);
+create policy "Permiso escritura libre" on usuarios for insert with check (true);
+create policy "Permiso edicion libre" on usuarios for update using (true);
+create policy "Permiso borrado libre" on usuarios for delete using (true);
 `;

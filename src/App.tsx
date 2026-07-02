@@ -18,7 +18,8 @@ import {
   upsertUserToSupabase,
   initializeDefaultUsers,
   toValidUUID,
-  pushPurchaseOrderToSupabase
+  pushPurchaseOrderToSupabase,
+  getSupabaseClient
 } from './supabaseService';
 
 // Subcomponents
@@ -269,7 +270,7 @@ export default function App() {
     }
   }, []);
 
-  const fetchGoogleProfile = async (token: string) => {
+  const fetchGoogleProfile = async (token: string, idToken?: string) => {
     try {
       const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
         headers: { Authorization: `Bearer ${token}` }
@@ -287,6 +288,28 @@ export default function App() {
         localStorage.setItem('verse_is_logged_in', 'true');
         showToast(`¡Conexión Google Exitosa! Bienvenido, ${profile.name}`, 'success');
         appendAuditLog('INICIO SESIÓN', `Usuario inició sesión de forma segura a través de Google Workspace OAuth (${profile.name}).`, profile.email);
+        
+        // --- VINCULACIÓN CON SUPABASE AUTH VIA ID TOKEN ---
+        const url = localStorage.getItem('verse_supabase_url') || 'https://iqxwrfjfdvixidsnfwja.supabase.co';
+        const key = localStorage.getItem('verse_supabase_key') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg';
+        const finalIdToken = idToken || localStorage.getItem('verse_google_id_token');
+        if (url && key && finalIdToken) {
+          const client = getSupabaseClient(url, key);
+          if (client) {
+            console.log("Iniciando autenticación en Supabase con Google ID Token...");
+            const { data: sbData, error: sbErr } = await client.auth.signInWithIdToken({
+              provider: 'google',
+              token: finalIdToken
+            });
+            if (sbErr) {
+              console.warn("Fallo de signInWithIdToken en Supabase:", sbErr.message);
+            } else {
+              console.log("Sesión de Supabase establecida correctamente:", sbData);
+              showToast("Sesión de base de datos autorizada vía Google", "success");
+            }
+          }
+        }
+        // ---------------------------------------------------
         
         // Ejecutar inmediatamente la validación de acceso para bloquear/permitir según base de datos
         await checkUserAccess(profile.email, profile.name);
@@ -399,6 +422,7 @@ export default function App() {
               setRecords(result.records || []);
               setContacts(result.contacts || []);
               setAuditLogs(result.auditLogs || []);
+              setPurchaseOrders(result.purchaseOrders || []);
               setSupabaseStatus('CONNECTED');
               
               if (result.records.length > 0) {
@@ -449,10 +473,11 @@ export default function App() {
       const hash = window.location.hash.substring(1);
       const params = new URLSearchParams(hash);
       const token = params.get('access_token');
+      const idToken = params.get('id_token');
       const state = params.get('state');
       if (token && state === 'sheets_sync') {
         if (window.opener) {
-          window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token }, window.location.origin);
+          window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token, idToken }, window.location.origin);
           window.close();
         }
       }
@@ -466,9 +491,13 @@ export default function App() {
 
       if (event.data?.type === 'GOOGLE_SHEETS_TOKEN' && event.data?.token) {
         const token = event.data.token;
+        const idToken = event.data.idToken;
         setGoogleToken(token);
         localStorage.setItem('verse_sheet_token', token);
-        fetchGoogleProfile(token);
+        if (idToken) {
+          localStorage.setItem('verse_google_id_token', idToken);
+        }
+        fetchGoogleProfile(token, idToken);
       }
     };
 
@@ -479,7 +508,8 @@ export default function App() {
   // Dynamic fetch Google profile upon startup if token is active
   useEffect(() => {
     if (googleToken && !googleUser) {
-      fetchGoogleProfile(googleToken);
+      const idToken = localStorage.getItem('verse_google_id_token') || undefined;
+      fetchGoogleProfile(googleToken, idToken);
     }
   }, [googleToken, googleUser]);
 

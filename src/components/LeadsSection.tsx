@@ -56,6 +56,18 @@ const STAGE_THRESHOLDS: Record<string, { warn: number; critical: number }> = {
   'Cerrado Perdido': { warn: 30, critical: 60 },
 };
 
+const getStageStyles = (st: string) => {
+  switch (st) {
+    case 'Nuevo': return { dot: 'bg-blue-500', bg: 'bg-blue-50 text-blue-800 border-blue-200' };
+    case 'Contactado': return { dot: 'bg-cyan-500', bg: 'bg-cyan-50 text-cyan-800 border-cyan-200' };
+    case 'Cotizado': return { dot: 'bg-amber-500', bg: 'bg-amber-50 text-amber-800 border-amber-200' };
+    case 'Negociación': return { dot: 'bg-purple-500', bg: 'bg-purple-50 text-purple-800 border-purple-200' };
+    case 'Cerrado Ganado': return { dot: 'bg-emerald-500', bg: 'bg-emerald-50 text-emerald-850 border-emerald-200' };
+    case 'Cerrado Perdido': return { dot: 'bg-slate-500', bg: 'bg-slate-50 text-slate-800 border-slate-200' };
+    default: return { dot: 'bg-slate-450', bg: 'bg-slate-50 text-slate-700' };
+  }
+};
+
 interface KanbanMeta {
   stage: string;
   dateEnteredStage: string; // YYYY-MM-DD
@@ -187,7 +199,57 @@ export default function LeadsSection({
     localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(kanbanMeta));
   }, [kanbanMeta]);
 
-  // Synchronise existing master list records with the Kanban system
+  // Helper to map a standard/default stage name to the corresponding customized/active column in kanbanColumns
+  const resolveStageName = (defaultStage: string): string => {
+    if (kanbanColumns.includes(defaultStage)) return defaultStage;
+
+    const defaultIndexMap: Record<string, number> = {
+      'Nuevo': 0,
+      'Contactado': 1,
+      'Cotizado': 2,
+      'Negociación': 3,
+      'Cerrado Ganado': 4,
+      'Cerrado Perdido': 5
+    };
+
+    const idx = defaultIndexMap[defaultStage];
+    if (idx !== undefined && kanbanColumns[idx]) {
+      return kanbanColumns[idx];
+    }
+
+    if (defaultStage === 'Cerrado Ganado') {
+      const found = kanbanColumns.find(c => c.toLowerCase().includes('ganado'));
+      if (found) return found;
+    }
+    if (defaultStage === 'Cerrado Perdido') {
+      const found = kanbanColumns.find(c => c.toLowerCase().includes('perdido'));
+      if (found) return found;
+    }
+
+    return kanbanColumns[0] || defaultStage;
+  };
+
+  // Helper to map a customized/active column name back to its standard/default equivalent
+  const getDefaultStageForCustom = (customStage: string): string => {
+    const defaultStages = ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
+    if (defaultStages.includes(customStage)) return customStage;
+
+    const idx = kanbanColumns.indexOf(customStage);
+    if (idx !== -1 && idx < defaultStages.length) {
+      return defaultStages[idx];
+    }
+
+    if (customStage.toLowerCase().includes('ganado')) return 'Cerrado Ganado';
+    if (customStage.toLowerCase().includes('perdido')) return 'Cerrado Perdido';
+    if (customStage.toLowerCase().includes('negoc')) return 'Negociación';
+    if (customStage.toLowerCase().includes('cotiz') || customStage.toLowerCase().includes('lead')) return 'Cotizado';
+    if (customStage.toLowerCase().includes('contact')) return 'Contactado';
+    if (customStage.toLowerCase().includes('prospect') || customStage.toLowerCase().includes('nuev')) return 'Nuevo';
+
+    return customStage;
+  };
+
+  // Synchronise existing master list records with the Kanban system with smart automatic movements
   useEffect(() => {
     if (records.length > 0) {
       let anyChange = false;
@@ -195,32 +257,66 @@ export default function LeadsSection({
       
       const mockResponsables = RESPONSIBLES;
       const mockTags = ['Renovación', 'Riesgo', 'SAT / ISO', 'Urgente', 'B2B Tech', 'SaaS', 'Planta Crítica'];
-      const stages: (string)[] = [
-        'Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'
-      ];
 
       records.forEach((r, idx) => {
-        if (!updatedMeta[r.id]) {
-          // Determine initial stage based on master list status
-          let stage: string = 'Sin Asignar';
+        const currentStage = updatedMeta[r.id]?.stage;
+        let defaultTarget: string | null = null;
 
-          // Varied entry dates to show traffic light visual system relative on load
-          let dateStr = '2026-06-12'; // 2 days ago (Amber alerts depending on column thresholds)
-          if (idx % 4 === 0) {
-            dateStr = '2026-06-14'; // 0 days ago (Green)
-          } else if (idx % 4 === 1) {
-            dateStr = '2026-06-08'; // 6 days ago (Amber or Red depending on thresh)
-          } else if (idx % 4 === 2) {
-            dateStr = '2026-05-29'; // 16 days ago (Red / Critical)
+        // 1. Determine the expected default stage based on r.etapa, or r.estado_proyecto & r.status_proyecto
+        if (r.etapa && kanbanColumns.includes(r.etapa)) {
+          defaultTarget = r.etapa;
+        } else if (r.estado_proyecto === 'Cerrado Ganado') {
+          defaultTarget = 'Cerrado Ganado';
+        } else if (r.estado_proyecto === 'Negociación') {
+          defaultTarget = 'Negociación';
+        } else if (r.estado_proyecto === 'Propuesta') {
+          // If in proposal, sub-segment based on financial data availability
+          if (r.total_hardware_cotizacion !== null && r.total_hardware_cotizacion !== undefined && Number(r.total_hardware_cotizacion) > 0) {
+            defaultTarget = 'Cotizado';
+          } else if (r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion !== 'https://drive.google.com/file/d/new_quote_ref' && r.informacion_general_link_cotizacion !== '') {
+            defaultTarget = 'Cotizado';
+          } else if (r.status_proyecto === 'Warm') {
+            defaultTarget = 'Contactado';
           } else {
-            dateStr = '2026-06-13'; // 1 day ago (Green/Amber)
+            // Keep current stage if it's already the custom version of 'Nuevo', 'Contactado', or 'Cotizado'
+            const customNuevo = resolveStageName('Nuevo');
+            const customContactado = resolveStageName('Contactado');
+            const customCotizado = resolveStageName('Cotizado');
+            if (currentStage === customNuevo || currentStage === customContactado || currentStage === customCotizado) {
+              defaultTarget = getDefaultStageForCustom(currentStage);
+            } else {
+              defaultTarget = 'Nuevo';
+            }
           }
+        } else if (r.estado_proyecto === null || r.estado_proyecto === undefined) {
+          if (r.status_proyecto === 'Win') defaultTarget = 'Cerrado Ganado';
+          else if (r.status_proyecto === 'Hot') defaultTarget = 'Negociación';
+          else if (r.status_proyecto === 'Warm') defaultTarget = 'Contactado';
+          else if (r.status_proyecto === 'Cool') defaultTarget = 'Nuevo';
+          else {
+            if (currentStage) {
+              defaultTarget = getDefaultStageForCustom(currentStage);
+            } else {
+              defaultTarget = 'Nuevo';
+            }
+          }
+        }
+
+        // Apply fallback if still null
+        if (!defaultTarget) defaultTarget = 'Nuevo';
+
+        // Resolve default stage to active custom column name
+        const targetStage = resolveStageName(defaultTarget);
+
+        // 2. If it's a completely new card in kanbanMeta
+        if (!updatedMeta[r.id]) {
+          const dateStr = getMexicoCityDateString();
 
           const resp = mockResponsables[idx % mockResponsables.length];
-          const subtaskTexts = stage === 'Nuevo' ? ["Establecer contacto inicial", "Agendar llamada Zoom", "Documentar requerimientos"]
-            : stage === 'Contactado' ? ["Enviar correo introductorio", "Calificar presupuesto", "Identificar decisores"]
-            : stage === 'Cotizado' ? ["Estructurar cotización de hardware", "Revisar costos servicios", "Propuesta preliminar", "Registrar SAT"]
-            : stage === 'Negociación' ? ["Ajustar margen", "Revisión gerencial", "Enviar minuta", "Validar planta"]
+          const subtaskTexts = defaultTarget === 'Nuevo' ? ["Establecer contacto inicial", "Agendar llamada Zoom", "Documentar requerimientos"]
+            : defaultTarget === 'Contactado' ? ["Enviar correo introductorio", "Calificar presupuesto", "Identificar decisores"]
+            : defaultTarget === 'Cotizado' ? ["Estructurar cotización de hardware", "Revisar costos servicios", "Propuesta preliminar", "Registrar SAT"]
+            : defaultTarget === 'Negociación' ? ["Ajustar margen", "Revisión gerencial", "Enviar minuta", "Validar planta"]
             : ["Alta sistema SAP", "Solicitar folio OC", "Firma de contrato de prestación"];
 
           const subtasks = subtaskTexts.map((txt, sidx) => ({
@@ -234,13 +330,23 @@ export default function LeadsSection({
           if (idx % 3 === 0) tags.push(mockTags[(idx + 2) % mockTags.length]);
 
           updatedMeta[r.id] = {
-            stage,
+            stage: targetStage,
             dateEnteredStage: dateStr,
             responsable: resp,
             subtasks,
             tags
           };
           anyChange = true;
+        } else {
+          // 3. For existing cards, if the targetStage changed due to outside database / manual updates, update automatically
+          if (currentStage !== targetStage) {
+            updatedMeta[r.id] = {
+              ...updatedMeta[r.id],
+              stage: targetStage,
+              dateEnteredStage: getMexicoCityDateString()
+            };
+            anyChange = true;
+          }
         }
       });
 
@@ -248,7 +354,7 @@ export default function LeadsSection({
         setKanbanMeta(updatedMeta);
       }
     }
-  }, [records]);
+  }, [records, kanbanColumns]);
 
   // Advanced Filter states
   const [activeTabFilter, setActiveTabFilter] = useState<'all' | 'active' | 'closed'>('all');
@@ -276,8 +382,8 @@ export default function LeadsSection({
   const [formUbicacion, setFormUbicacion] = useState('');
   const [formProyecto, setFormProyecto] = useState('');
   const [formLinkCotizacion, setFormLinkCotizacion] = useState('');
-  const [formHardware, setFormHardware] = useState<number>(0);
-  const [formServicios, setFormServicios] = useState<number>(0);
+  const [formHardware, setFormHardware] = useState<number | ''>('');
+  const [formServicios, setFormServicios] = useState<number | ''>('');
   const [formMoneda, setFormMoneda] = useState<'USD' | 'MXN'>('USD');
   const [formStatus, setFormStatus] = useState<'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null>(null);
   const [formNotas, setFormNotas] = useState('');
@@ -303,7 +409,9 @@ export default function LeadsSection({
 
   // Auto Calculations
   useEffect(() => {
-    const calculatedSubtotal = Number(formHardware) + Number(formServicios);
+    const hw = formHardware === '' ? 0 : Number(formHardware);
+    const serv = formServicios === '' ? 0 : Number(formServicios);
+    const calculatedSubtotal = hw + serv;
     const calculatedIva = calculatedSubtotal * 0.16;
     const calculatedTotal = calculatedSubtotal + calculatedIva;
     
@@ -360,8 +468,8 @@ export default function LeadsSection({
     setFormUbicacion(rec.cliente_ubicacion || '');
     setFormProyecto(rec.informacion_general_proyecto || '');
     setFormLinkCotizacion(rec.informacion_general_link_cotizacion || '');
-    setFormHardware(rec.total_hardware_cotizacion);
-    setFormServicios(rec.total_servicios_cotizacion);
+    setFormHardware(rec.total_hardware_cotizacion !== null && rec.total_hardware_cotizacion !== undefined ? rec.total_hardware_cotizacion : '');
+    setFormServicios(rec.total_servicios_cotizacion !== null && rec.total_servicios_cotizacion !== undefined ? rec.total_servicios_cotizacion : '');
     setFormMoneda(rec.informacion_general_moneda);
     setFormStatus(rec.estado_proyecto || null);
     setFormNotas(rec.notas_comerciales || '');
@@ -431,11 +539,11 @@ export default function LeadsSection({
       cliente_ubicacion: formUbicacion || null,
       informacion_general_proyecto: formProyecto || null,
       informacion_general_link_cotizacion: formLinkCotizacion || null,
-      total_hardware_cotizacion: Number(formHardware),
-      total_servicios_cotizacion: Number(formServicios),
-      total_subtotal_cotizacion: subtotal,
-      total_iva_cotizacion: iva,
-      total_general_cotizacion: total,
+      total_hardware_cotizacion: formHardware === '' ? null : Number(formHardware),
+      total_servicios_cotizacion: formServicios === '' ? null : Number(formServicios),
+      total_subtotal_cotizacion: (formHardware === '' && formServicios === '') ? null : subtotal,
+      total_iva_cotizacion: (formHardware === '' && formServicios === '') ? null : iva,
+      total_general_cotizacion: (formHardware === '' && formServicios === '') ? null : total,
       informacion_general_moneda: formMoneda,
       estado_proyecto: formStatus || null,
       status_proyecto: nextStatusProyecto || null,
@@ -447,7 +555,13 @@ export default function LeadsSection({
       link_orden_compra: existingRec?.link_orden_compra || null,
       folio_orden_compra: existingRec?.folio_orden_compra || null,
       fecha_inicio_proyecto: existingRec?.fecha_inicio_proyecto || null,
-      informacion_general_instalacion_incluida: existingRec?.informacion_general_instalacion_incluida ?? undefined
+      informacion_general_instalacion_incluida: existingRec?.informacion_general_instalacion_incluida ?? undefined,
+
+      // NUEVOS CAMPOS INDEPENDIENTES
+      etapa: existingRec?.etapa || (formStatus ? resolveStageName(formStatus) : 'Nuevo'),
+      nivel_termo: nextStatusProyecto || null,
+      prioridad: existingRec?.prioridad ?? 0,
+      estado: formStatus || null
     };
 
     if (isEditing) {
@@ -640,6 +754,7 @@ export default function LeadsSection({
           minimumFractionDigits: 0
         });
       }
+      else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
       else if (colKey === 'status') val = r.estado_proyecto;
       else if (colKey === 'level') val = getTemperature(r);
       else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
@@ -674,6 +789,7 @@ export default function LeadsSection({
           minimumFractionDigits: 0
         });
       }
+      else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
       else if (colKey === 'status') val = r.estado_proyecto;
       else if (colKey === 'level') val = getTemperature(r);
       else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
@@ -805,6 +921,9 @@ export default function LeadsSection({
     } else if (sortColumn === 'status') {
       valA = a.estado_proyecto || '';
       valB = b.estado_proyecto || '';
+    } else if (sortColumn === 'stage') {
+      valA = kanbanMeta[a.id]?.stage || resolveStageName('Nuevo');
+      valB = kanbanMeta[b.id]?.stage || resolveStageName('Nuevo');
     } else if (sortColumn === 'level') {
       const getPriorityValue = (temp: string) => {
         if (temp === 'Win') return 4;
@@ -865,6 +984,7 @@ export default function LeadsSection({
     if (colKey === 'plant') return 'w-[12%] min-w-[110px] max-w-[130px]';
     if (colKey === 'project') return 'w-[15%] min-w-[140px] max-w-[190px]';
     if (colKey === 'amount') return 'w-[10%] min-w-[95px] max-w-[110px]';
+    if (colKey === 'stage') return 'w-[9%] min-w-[100px] max-w-[115px]';
     if (colKey === 'status') return 'w-[9%] min-w-[100px] max-w-[115px]';
     if (colKey === 'level') return 'w-[8%] min-w-[95px] max-w-[110px]';
     if (colKey === 'actions_followup') return 'w-[15%] min-w-[140px] max-w-[185px]';
@@ -1119,6 +1239,178 @@ export default function LeadsSection({
     setDragOverStage(null);
   };
 
+  const [draggedOverCardId, setDraggedOverCardId] = useState<string | null>(null);
+
+  // Helper to get ALL records currently assigned to a stage
+  const getStageRecords = (stage: string): CRMRecord[] => {
+    return records.filter(r => {
+      const meta = kanbanMeta[r.id];
+      return meta && meta.stage === stage;
+    }).sort((a,b) => {
+      const pA = a.prioridad !== undefined && a.prioridad !== null ? Number(a.prioridad) : 0;
+      const pB = b.prioridad !== undefined && b.prioridad !== null ? Number(b.prioridad) : 0;
+      if (pA !== pB) return pB - pA;
+      const dateA = a.fecha_registro || '';
+      const dateB = b.fecha_registro || '';
+      return dateB.localeCompare(dateA) || a.id.localeCompare(b.id);
+    });
+  };
+
+  const saveNewListPrioritiesAndStage = (
+    newList: CRMRecord[], 
+    targetStage: string, 
+    draggedId: string, 
+    sourceStage: string
+  ) => {
+    const updatedMeta = { ...kanbanMeta };
+
+    // Update the dragged card stage in meta
+    if (updatedMeta[draggedId]) {
+      updatedMeta[draggedId] = {
+        ...updatedMeta[draggedId],
+        stage: targetStage,
+        dateEnteredStage: sourceStage !== targetStage ? getMexicoCityDateString() : updatedMeta[draggedId].dateEnteredStage
+      };
+      setKanbanMeta(updatedMeta);
+    }
+
+    // Determine target project status/estado
+    const defaultTarget = getDefaultStageForCustom(targetStage);
+    let newEstadoProyecto: any = undefined;
+    let newStatusProyecto: any = undefined;
+    if (defaultTarget === 'Negociación') {
+      newEstadoProyecto = 'Negociación';
+      newStatusProyecto = 'Warm';
+    } else if (defaultTarget === 'Cotizado') {
+      newEstadoProyecto = 'Propuesta';
+      newStatusProyecto = 'Cool';
+    } else if (defaultTarget === 'Nuevo' || defaultTarget === 'Contactado') {
+      newEstadoProyecto = 'Propuesta';
+      newStatusProyecto = 'Cool';
+    }
+
+    // Now assign new priorities. The top card has priority newList.length * 10, the next (newList.length - 1) * 10, etc.
+    newList.forEach((rec, idx) => {
+      const newPriority = (newList.length - idx) * 10;
+      const isDragged = rec.id === draggedId;
+
+      const updatedRecord: CRMRecord = {
+        ...rec,
+        etapa: targetStage,
+        prioridad: newPriority,
+        nivel_termo: isDragged && newStatusProyecto !== undefined ? newStatusProyecto : (rec.nivel_termo || rec.status_proyecto || 'Cool'),
+        estado: isDragged && newEstadoProyecto !== undefined ? newEstadoProyecto : (rec.estado || rec.estado_proyecto || 'Propuesta'),
+        // Also update standard ones to keep fully compatible
+        status_proyecto: isDragged && newStatusProyecto !== undefined ? newStatusProyecto : rec.status_proyecto,
+        estado_proyecto: isDragged && newEstadoProyecto !== undefined ? newEstadoProyecto : rec.estado_proyecto
+      };
+
+      onUpdateRecord(updatedRecord);
+    });
+
+    if (sourceStage !== targetStage) {
+      const r = records.find(item => item.id === draggedId);
+      onShowAudit('MODIFICACIÓN', `Licitación comercial ${r?.informacion_general_folio || ''} reordenada y movida a etapa [${targetStage}] con prioridad reajustada.`);
+    } else {
+      const r = records.find(item => item.id === draggedId);
+      onShowAudit('MODIFICACIÓN', `Licitación comercial ${r?.informacion_general_folio || ''} reordenada verticalmente en la etapa [${targetStage}].`);
+    }
+  };
+
+  const handleCardDragOverCard = (e: React.DragEvent, targetCardId: string, cardStage: string) => {
+    if (role === 'Solo Lectura') return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedOverCardId !== targetCardId) {
+      setDraggedOverCardId(targetCardId);
+    }
+    if (dragOverStage !== cardStage) {
+      setDragOverStage(cardStage);
+    }
+  };
+
+  const handleCardDropOnCard = (e: React.DragEvent, targetCardId: string, targetStage: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDraggedOverCardId(null);
+    setDragOverStage(null);
+    setDraggingCardId(null);
+    
+    if (role === 'Solo Lectura') return;
+
+    const recordId = e.dataTransfer.getData('text/plain') || draggingCardId;
+    if (!recordId || recordId === targetCardId) return;
+
+    // Get current cards in the target stage
+    const stageRecords = getStageRecords(targetStage);
+    const sourceCard = records.find(r => r.id === recordId);
+    if (!sourceCard) return;
+
+    const currentMeta = kanbanMeta[recordId];
+    const sourceStage = currentMeta?.stage || 'Nuevo';
+
+    // Check if moving to closed state
+    const defaultTarget = getDefaultStageForCustom(targetStage);
+    if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
+      // Trigger confirmation modal
+      setPendingDrag({ recordId, targetStage, sourceStage });
+      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+      setCloseNotes('');
+      return;
+    }
+
+    // Reorder locally
+    let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+    const targetIdx = listWithoutDragged.findIndex(r => r.id === targetCardId);
+    
+    if (targetIdx !== -1) {
+      // Insert BEFORE targetCardId
+      listWithoutDragged.splice(targetIdx, 0, sourceCard);
+    } else {
+      listWithoutDragged.push(sourceCard);
+    }
+
+    saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
+  };
+
+  const handleCardDropOnColumn = (e: React.DragEvent, targetStage: string) => {
+    e.preventDefault();
+    setDragOverStage(null);
+    setDraggingCardId(null);
+    setDraggedOverCardId(null);
+
+    if (role === 'Solo Lectura') return;
+
+    const recordId = e.dataTransfer.getData('text/plain') || draggingCardId;
+    if (!recordId) return;
+
+    const currentMeta = kanbanMeta[recordId];
+    const sourceStage = currentMeta?.stage || 'Nuevo';
+
+    // If dropping on column background, we append it to the end of target stage
+    const stageRecords = getStageRecords(targetStage);
+    const sourceCard = records.find(r => r.id === recordId);
+    if (!sourceCard) return;
+
+    // Check if moving to closed state
+    const defaultTarget = getDefaultStageForCustom(targetStage);
+    if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
+      // Trigger confirmation modal
+      setPendingDrag({ recordId, targetStage, sourceStage });
+      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+      setCloseNotes('');
+      return;
+    }
+
+    // Filter out dragged card from target stage to avoid duplicate
+    let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+    
+    // Append to end of the list
+    listWithoutDragged.push(sourceCard);
+
+    saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
+  };
+
   const handleCardStageChange = (
     recordId: string, 
     targetStage: string
@@ -1128,44 +1420,21 @@ export default function LeadsSection({
     const sourceStage = currentMeta.stage;
     if (sourceStage === targetStage) return;
 
-    if (targetStage === 'Cerrado Ganado' || targetStage === 'Cerrado Perdido') {
+    const defaultTarget = getDefaultStageForCustom(targetStage);
+
+    if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
       // Trigger confirmation modal
       setPendingDrag({ recordId, targetStage, sourceStage });
-      setCloseReason(targetStage === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
       setCloseNotes('');
     } else {
-      // Move immediately with audit trail
-      const updatedMeta = { ...kanbanMeta };
-      updatedMeta[recordId] = {
-        ...updatedMeta[recordId],
-        stage: targetStage,
-        dateEnteredStage: '2026-06-14' // resets "days on stage" to 0
-      };
-      setKanbanMeta(updatedMeta);
-
-      const r = records.find(rec => rec.id === recordId);
-      if (r) {
-        let newEstadoProyecto = r.estado_proyecto;
-        let newStatusProyecto = r.status_proyecto;
-
-        if (targetStage === 'Negociación') {
-          newEstadoProyecto = 'Negociación';
-          newStatusProyecto = 'Warm';
-        } else if (targetStage === 'Cotizado') {
-          newEstadoProyecto = 'Propuesta';
-          newStatusProyecto = 'Cool';
-        } else if (targetStage === 'Nuevo' || targetStage === 'Contactado') {
-          newEstadoProyecto = 'Propuesta';
-          newStatusProyecto = 'Cool';
-        }
-
-        onUpdateRecord({
-          ...r,
-          estado_proyecto: newEstadoProyecto,
-          status_proyecto: newStatusProyecto
-        });
-
-        onShowAudit('MODIFICACIÓN', `Licitación comercial ${r.informacion_general_folio} movida de [${sourceStage}] a [${targetStage}]. Días en etapa reiniciados.`);
+      // Reorder and append
+      const stageRecords = getStageRecords(targetStage);
+      const sourceCard = records.find(r => r.id === recordId);
+      if (sourceCard) {
+        let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+        listWithoutDragged.push(sourceCard);
+        saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
       }
     }
   };
@@ -1177,6 +1446,7 @@ export default function LeadsSection({
     if (recordIds.length === 0) return;
 
     const updatedMeta = { ...kanbanMeta };
+    const defaultTarget = getDefaultStageForCustom(targetStage);
 
     recordIds.forEach(id => {
       const currentMeta = kanbanMeta[id];
@@ -1195,13 +1465,13 @@ export default function LeadsSection({
         let newEstadoProyecto = r.estado_proyecto;
         let newStatusProyecto = r.status_proyecto;
 
-        if (targetStage === 'Negociación') {
+        if (defaultTarget === 'Negociación') {
           newEstadoProyecto = 'Negociación';
           newStatusProyecto = 'Warm';
-        } else if (targetStage === 'Cotizado') {
+        } else if (defaultTarget === 'Cotizado') {
           newEstadoProyecto = 'Propuesta';
           newStatusProyecto = 'Cool';
-        } else if (targetStage === 'Nuevo' || targetStage === 'Contactado') {
+        } else if (defaultTarget === 'Nuevo' || defaultTarget === 'Contactado') {
           newEstadoProyecto = 'Propuesta';
           newStatusProyecto = 'Cool';
         }
@@ -1209,7 +1479,10 @@ export default function LeadsSection({
         onUpdateRecord({
           ...r,
           estado_proyecto: newEstadoProyecto,
-          status_proyecto: newStatusProyecto
+          status_proyecto: newStatusProyecto,
+          etapa: targetStage,
+          nivel_termo: newStatusProyecto,
+          estado: newEstadoProyecto
         });
       }
     });
@@ -1221,27 +1494,38 @@ export default function LeadsSection({
   const handleConfirmCloseDrag = () => {
     if (!pendingDrag) return;
     const { recordId, targetStage, sourceStage } = pendingDrag;
-    const updatedMeta = { ...kanbanMeta };
     
-    updatedMeta[recordId] = {
-      ...updatedMeta[recordId],
-      stage: targetStage,
-      dateEnteredStage: '2026-06-14', // resets to 0
-      motivoCierre: closeReason,
-      notasCierre: closeNotes
-    };
-    setKanbanMeta(updatedMeta);
+    // Reorder and append
+    const stageRecords = getStageRecords(targetStage);
+    const sourceCard = records.find(r => r.id === recordId);
+    if (sourceCard) {
+      const defaultTarget = getDefaultStageForCustom(targetStage);
+      
+      // Update local card with closing information
+      const updatedCard: CRMRecord = {
+        ...sourceCard,
+        estado_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : null,
+        status_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Win' : 'Cool',
+        notas_comerciales: closeNotes ? `${sourceCard.notas_comerciales || ''}\n[Cierre ${targetStage} - Motivo: ${closeReason}]: ${closeNotes}` : sourceCard.notas_comerciales,
+        etapa: targetStage,
+        nivel_termo: defaultTarget === 'Cerrado Ganado' ? 'Win' : 'Cool',
+        estado: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : 'Propuesta'
+      };
 
-    const r = records.find(rec => rec.id === recordId);
-    if (r) {
-      onUpdateRecord({
-        ...r,
-        estado_proyecto: targetStage === 'Cerrado Ganado' ? 'Cerrado Ganado' : null,
-        status_proyecto: targetStage === 'Cerrado Ganado' ? 'Win' : 'Cool', // cool placeholder
-        notas_comerciales: closeNotes ? `${r.notas_comerciales || ''}\n[Cierre ${targetStage} - Motivo: ${closeReason}]: ${closeNotes}` : r.notas_comerciales
-      });
+      // Ensure the metadata gets updated with reason/notes
+      const updatedMeta = { ...kanbanMeta };
+      if (updatedMeta[recordId]) {
+        updatedMeta[recordId] = {
+          ...updatedMeta[recordId],
+          motivoCierre: closeReason,
+          notasCierre: closeNotes
+        };
+        setKanbanMeta(updatedMeta);
+      }
 
-      onShowAudit('MODIFICACIÓN', `Fórmula B2B cerrada con éxito para ${r.informacion_general_folio} como [${targetStage}]. Motivo: ${closeReason}. Notas del cierre: ${closeNotes || 'ninguna'}`);
+      let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+      listWithoutDragged.push(updatedCard);
+      saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
     }
 
     setPendingDrag(null);
@@ -1349,6 +1633,16 @@ export default function LeadsSection({
           const nameA = kanbanMeta[a.id]?.responsable || '';
           const nameB = kanbanMeta[b.id]?.responsable || '';
           return nameA.localeCompare(nameB);
+        });
+      } else {
+        // DEFAULT ORDER: Sort by prioridad DESC, then newest registration date, then stable fallback ID
+        cards = [...cards].sort((a,b) => {
+          const pA = a.prioridad !== undefined && a.prioridad !== null ? Number(a.prioridad) : 0;
+          const pB = b.prioridad !== undefined && b.prioridad !== null ? Number(b.prioridad) : 0;
+          if (pA !== pB) return pB - pA;
+          const dateA = a.fecha_registro || '';
+          const dateB = b.fecha_registro || '';
+          return dateB.localeCompare(dateA) || a.id.localeCompare(b.id);
         });
       }
 
@@ -1459,17 +1753,6 @@ export default function LeadsSection({
           {columnsWithCards.map(({ stage, cards, totalMonto, limit, isOverWip, avgDays }) => {
             
             // Render specific Stage Headers
-            const getStageStyles = (st: string) => {
-              switch (st) {
-                case 'Nuevo': return { dot: 'bg-blue-500', bg: 'bg-blue-50 text-blue-800 border-blue-200' };
-                case 'Contactado': return { dot: 'bg-cyan-500', bg: 'bg-cyan-50 text-cyan-800 border-cyan-200' };
-                case 'Cotizado': return { dot: 'bg-amber-500', bg: 'bg-amber-50 text-amber-800 border-amber-200' };
-                case 'Negociación': return { dot: 'bg-purple-500', bg: 'bg-purple-50 text-purple-800 border-purple-200' };
-                case 'Cerrado Ganado': return { dot: 'bg-emerald-500', bg: 'bg-emerald-50 text-emerald-850 border-emerald-200' };
-                case 'Cerrado Perdido': return { dot: 'bg-slate-500', bg: 'bg-slate-50 text-slate-800 border-slate-200' };
-                default: return { dot: 'bg-slate-450', bg: 'bg-slate-50 text-slate-700' };
-              }
-            };
             const styles = getStageStyles(stage);
 
             return (
@@ -1500,13 +1783,7 @@ export default function LeadsSection({
                   setDragOverStage(prev => (prev === stage ? null : prev));
                 }}
                 onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverStage(null);
-                  setDraggingCardId(null);
-                  if (role === 'Solo Lectura') return;
-                  const recordId = e.dataTransfer.getData('text/plain') || draggingCardId;
-                  if (!recordId) return;
-                  handleCardStageChange(recordId, stage);
+                  handleCardDropOnColumn(e, stage);
                 }}
               >
                 {/* COLUMN HEADER */}
@@ -1802,11 +2079,15 @@ export default function LeadsSection({
                           draggable={role !== 'Solo Lectura'}
                           onDragStart={(e) => handleCardDragStart(e, card.id)}
                           onDragEnd={handleCardDragEnd}
+                          onDragOver={(e) => handleCardDragOverCard(e, card.id, stage)}
+                          onDrop={(e) => handleCardDropOnCard(e, card.id, stage)}
                           onClick={() => {
                             setActiveDrawerRecordId(card.id);
                           }}
                           className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-2 ${
                             draggingCardId === card.id ? 'opacity-40 scale-[0.98]' : ''
+                          } ${
+                            draggedOverCardId === card.id ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/10 scale-[1.01]' : ''
                           }`}
                         >
                           <div>
@@ -2020,12 +2301,13 @@ export default function LeadsSection({
                   <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Suministros (HW)</label>
                   <input
                     type="number"
-                    value={card.total_hardware_cotizacion || 0}
+                    value={card.total_hardware_cotizacion !== null && card.total_hardware_cotizacion !== undefined ? card.total_hardware_cotizacion : ''}
                     onChange={(e) => {
-                      const hw = Number(e.target.value);
-                      const sub = hw + (card.total_servicios_cotizacion || 0);
-                      const iva = sub * 0.16;
-                      const tot = sub + iva;
+                      const hw = e.target.value === '' ? null : Number(e.target.value);
+                      const serv = card.total_servicios_cotizacion;
+                      const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
+                      const iva = sub === null ? null : sub * 0.16;
+                      const tot = sub === null ? null : sub + (iva !== null ? iva : 0);
                       onUpdateRecord({
                         ...card,
                         total_hardware_cotizacion: hw,
@@ -2043,12 +2325,13 @@ export default function LeadsSection({
                   <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Integ (Servicio)</label>
                   <input
                     type="number"
-                    value={card.total_servicios_cotizacion || 0}
+                    value={card.total_servicios_cotizacion !== null && card.total_servicios_cotizacion !== undefined ? card.total_servicios_cotizacion : ''}
                     onChange={(e) => {
-                      const serv = Number(e.target.value);
-                      const sub = (card.total_hardware_cotizacion || 0) + serv;
-                      const iva = sub * 0.16;
-                      const tot = sub + iva;
+                      const serv = e.target.value === '' ? null : Number(e.target.value);
+                      const hw = card.total_hardware_cotizacion;
+                      const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
+                      const iva = sub === null ? null : sub * 0.16;
+                      const tot = sub === null ? null : sub + (iva !== null ? iva : 0);
                       onUpdateRecord({
                         ...card,
                         total_servicios_cotizacion: serv,
@@ -2685,6 +2968,7 @@ export default function LeadsSection({
                   {renderHeaderCell('plant', 'Planta Industrial')}
                   {renderHeaderCell('project', 'Descripción Proyecto')}
                   {renderHeaderCell('amount', 'Subtotal Proyecto', 'right')}
+                  {renderHeaderCell('stage', 'Etapa', 'center')}
                   {renderHeaderCell('status', 'Estado')}
                   {renderHeaderCell('level', 'Nivel / Termo', 'center')}
                   {renderHeaderCell('actions_followup', 'Acciones', 'center')}
@@ -2695,7 +2979,7 @@ export default function LeadsSection({
               <tbody className="divide-y divide-slate-150 text-sm">
                 {paginatedRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-slate-400">
+                    <td colSpan={11} className="p-8 text-center text-slate-400">
                       Ningún registro mapea con los filtros definidos.
                     </td>
                   </tr>
@@ -2723,6 +3007,18 @@ export default function LeadsSection({
                           currency: r.informacion_general_moneda,
                           minimumFractionDigits: 0
                         })}
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('stage')}`}>
+                        {(() => {
+                          const s = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
+                          const styles = getStageStyles(s);
+                          return (
+                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border ${styles.bg}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`}></span>
+                              {s}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className={`p-3 px-4 text-center ${getColWidthClass('status')}`}>
                         <EstadoCell
@@ -3129,10 +3425,9 @@ export default function LeadsSection({
                     </label>
                     <input
                       type="number"
-                      required
                       min="0"
                       value={formHardware}
-                      onChange={(e) => setFormHardware(Number(e.target.value))}
+                      onChange={(e) => setFormHardware(e.target.value === '' ? '' : Number(e.target.value))}
                       className="text-xs w-full bg-white border border-slate-200 p-1.5 focus:ring-1 text-[#0b1c30] font-data-mono"
                     />
                   </div>
@@ -3142,10 +3437,9 @@ export default function LeadsSection({
                     </label>
                     <input
                       type="number"
-                      required
                       min="0"
                       value={formServicios}
-                      onChange={(e) => setFormServicios(Number(e.target.value))}
+                      onChange={(e) => setFormServicios(e.target.value === '' ? '' : Number(e.target.value))}
                       className="text-xs w-full bg-white border border-slate-200 p-1.5 focus:ring-1 text-[#0b1c30] font-data-mono"
                     />
                   </div>
@@ -4035,7 +4329,11 @@ function EstadoCell({
     onUpdate({
       ...record,
       estado_proyecto: status,
-      status_proyecto: nextStatusProyecto
+      status_proyecto: nextStatusProyecto,
+      
+      // SYNC NEW FIELDS
+      estado: status,
+      nivel_termo: nextStatusProyecto
     });
     setIsOpen(false);
   };
