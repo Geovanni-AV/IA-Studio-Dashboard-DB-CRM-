@@ -42,8 +42,8 @@ export default function QuotationsSection({ records, exchangeRate, onShowAudit }
   const convertedHardware = getConvertedPrice(hardwareVal, selectedRecord.informacion_general_moneda);
   const convertedServices = getConvertedPrice(servicesVal, selectedRecord.informacion_general_moneda);
   const convertedSubtotal = convertedHardware + convertedServices;
-  const calculatedIva = convertedSubtotal * 0.16;
-  const calculatedTotal = convertedSubtotal + calculatedIva;
+  const calculatedIva = 0;
+  const calculatedTotal = convertedSubtotal;
 
   return (
     <div className="space-y-6 fade-in">

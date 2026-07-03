@@ -438,6 +438,16 @@ function getFlexibleValue(r: any, keys: string[], fallback: any = ''): any {
   return fallback;
 }
 
+function cleanStr(v: any): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  const lower = s.toLowerCase();
+  if (lower === 'no proporcionado' || lower === 'no_proporcionado' || lower === 'n/a' || lower === 'na' || lower === 'null' || lower === 'undefined') {
+    return null;
+  }
+  return s;
+}
+
 export function mapRawCRMRecord(r: any): CRMRecord {
   const rawHw = getFlexibleValue(r, ['total_hardware_cotizacion', 'hardware', 'Hardware']);
   const rawServ = getFlexibleValue(r, ['total_servicios_cotizacion', 'servicios', 'servicio', 'Servicios']);
@@ -455,8 +465,8 @@ export function mapRawCRMRecord(r: any): CRMRecord {
   const dbGeneral = (rawGen === null || rawGen === undefined || String(rawGen).trim() === '') ? null : Number(rawGen);
 
   const subtotal = dbSubtotal !== null ? dbSubtotal : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
-  const iva = dbIva !== null ? dbIva : parseFloat((subtotal * 0.16).toFixed(2));
-  const general = dbGeneral !== null ? dbGeneral : parseFloat((subtotal + iva).toFixed(2));
+  const iva = dbIva !== null ? dbIva : 0;
+  const general = dbGeneral !== null ? dbGeneral : subtotal;
 
   const rawAcciones = getFlexibleValue(r, ['acciones_seguimiento', 'acciones', 'acciones_seguimiento'], []);
   let acciones_parsed: any[] = [];
@@ -522,14 +532,14 @@ export function mapRawCRMRecord(r: any): CRMRecord {
 
   return {
     id: toValidUUID(String(getFlexibleValue(r, ['id', 'ID', '_id', 'informacion_general_folio', 'folio', 'Folio']) || '')),
-    informacion_general_folio: getFlexibleValue(r, ['informacion_general_folio', 'folio', 'Folio']) || null,
+    informacion_general_folio: cleanStr(getFlexibleValue(r, ['informacion_general_folio', 'folio', 'Folio'])) || null,
     fecha_registro: getFlexibleValue(r, ['informacion_general_fecha', 'fecha_registro', 'fecha registro', 'fecha', 'registro', 'Fecha Registro']) || null,
-    informacion_general_cliente: getFlexibleValue(r, ['informacion_general_cliente', 'cliente', 'Cliente']) || null,
-    informacion_general_planta: getFlexibleValue(r, ['informacion_general_planta', 'planta', 'Planta']) || null,
-    cliente_pais: getFlexibleValue(r, ['cliente_pais', 'pais', 'Pais', 'country']) || null,
-    cliente_ubicacion: getFlexibleValue(r, ['cliente_ubicacion', 'ubicacion', 'Ubicacion', 'ciudad', 'location']) || null,
-    informacion_general_proyecto: getFlexibleValue(r, ['informacion_general_proyecto', 'proyecto', 'Proyecto']) || null,
-    informacion_general_link_cotizacion: getFlexibleValue(r, ['informacion_general_link_cotizacion', 'link_cotizacion', 'link cotizacion', 'Link Cotizacion', 'cotizacion']) || null,
+    informacion_general_cliente: cleanStr(getFlexibleValue(r, ['informacion_general_cliente', 'cliente', 'Cliente'])) || null,
+    informacion_general_planta: cleanStr(getFlexibleValue(r, ['informacion_general_planta', 'planta', 'Planta'])) || null,
+    cliente_pais: cleanStr(getFlexibleValue(r, ['cliente_pais', 'pais', 'Pais', 'country'])) || null,
+    cliente_ubicacion: cleanStr(getFlexibleValue(r, ['cliente_ubicacion', 'ubicacion', 'Ubicacion', 'ciudad', 'location'])) || null,
+    informacion_general_proyecto: cleanStr(getFlexibleValue(r, ['informacion_general_proyecto', 'proyecto', 'Proyecto'])) || null,
+    informacion_general_link_cotizacion: cleanStr(getFlexibleValue(r, ['informacion_general_link_cotizacion', 'link_cotizacion', 'link cotizacion', 'Link Cotizacion', 'cotizacion'])) || null,
     total_hardware_cotizacion: hardware,
     total_servicios_cotizacion: servicios,
     total_subtotal_cotizacion: subtotal,
@@ -539,22 +549,50 @@ export function mapRawCRMRecord(r: any): CRMRecord {
     estado_proyecto: finalEstado,
     status_proyecto: finalStatusNivel,
     folio_orden_compra: detectedFolioOc || null,
-    link_orden_compra: getFlexibleValue(r, ['link_orden_compra', 'link_oc', 'link oc', 'Link OC', 'link_orden_compra']) || null,
+    link_orden_compra: cleanStr(getFlexibleValue(r, ['link_orden_compra', 'link_oc', 'link oc', 'Link OC', 'link_orden_compra'])) || null,
     fecha_inicio_proyecto: getFlexibleValue(r, ['fecha_inicio_proyecto', 'fecha_inicio', 'fecha inicio', 'Fecha Inicio']) || null,
     informacion_general_instalacion_incluida: instalacion,
-    notas_comerciales: getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales']) || null,
+    notas_comerciales: cleanStr(getFlexibleValue(r, ['notas_comerciales', 'notas', 'Notas', 'notas_comerciales'])) || null,
     acciones_seguimiento: acciones_parsed,
-    sustituye_folio_anterior: getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior']) || null,
+    sustituye_folio_anterior: cleanStr(getFlexibleValue(r, ['sustituye_folio_anterior', 'sustituye', 'sustituye_folio_anterior'])) || null,
     prioridad_nivel: finalStatusNivel,
 
     // Campos independientes mapeados de la base de datos
-    etapa: getFlexibleValue(r, ['etapa', 'Etapa', 'kanban_stage', 'stage']) || null,
+    etapa: cleanStr(getFlexibleValue(r, ['etapa', 'Etapa', 'kanban_stage', 'stage'])) || null,
     nivel_termo: getFlexibleValue(r, ['nivel_termo', 'nivel_termo', 'nivel', 'nivel_termo_proyecto']) || finalStatusNivel,
     prioridad: (() => {
       const pVal = getFlexibleValue(r, ['prioridad', 'Prioridad', 'order', 'orden', 'posicion']);
       return (pVal !== null && pVal !== undefined && String(pVal).trim() !== '') ? Number(pVal) : 0;
     })(),
-    estado: getFlexibleValue(r, ['estado', 'Estado', 'estado_proyecto', 'estado_proyecto']) || finalEstado
+    estado: getFlexibleValue(r, ['estado', 'Estado', 'estado_proyecto', 'estado_proyecto']) || finalEstado,
+
+    // Nuevos campos para persistencia en Supabase
+    fecha_cambio_etapa: getFlexibleValue(r, ['fecha_cambio_etapa', 'fecha_cambio_etapa', 'dateEnteredStage', 'date_entered_stage']) || null,
+    stagnation_days_limit: (() => {
+      const v = getFlexibleValue(r, ['stagnation_days_limit', 'stagnation_days_limit', 'stagnation_limit']);
+      return (v !== null && v !== undefined && String(v).trim() !== '') ? Number(v) : 5;
+    })(),
+    checklist_tasks: getFlexibleValue(r, ['checklist_tasks', 'checklist_tasks', 'checklist', 'subtasks']) || null,
+    __tareas: (() => {
+      const t = getFlexibleValue(r, ['__tareas', 'tareas']);
+      if (!t) return [];
+      if (Array.isArray(t)) return t;
+      try {
+        const parsed = JSON.parse(t);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    })(),
+    contacto_asignado_id: cleanStr(getFlexibleValue(r, ['contacto_asignado_id', 'contacto_asignado_id', 'responsable_id'])) || null,
+    responsable: cleanStr(getFlexibleValue(r, ['responsable', 'responsable', 'propietario', 'owner'])) || null,
+    tags: getFlexibleValue(r, ['tags', 'tags', 'etiquetas']) || null,
+
+    // Campos de contacto asignado
+    contacto_nombre: cleanStr(getFlexibleValue(r, ['contacto_nombre', 'contacto_nombre'])) || null,
+    contacto_puesto: cleanStr(getFlexibleValue(r, ['contacto_puesto', 'contacto_puesto'])) || null,
+    contacto_email: cleanStr(getFlexibleValue(r, ['contacto_email', 'contacto_email', 'contacto_correo'])) || null,
+    contacto_telefono: cleanStr(getFlexibleValue(r, ['contacto_telefono', 'contacto_telefono'])) || null
   };
 }
 
@@ -1261,8 +1299,8 @@ export async function pushCRMRecordToSupabase(
     const servicios = (rawServ === null || rawServ === undefined || String(rawServ).trim() === '') ? null : Number(rawServ);
 
     const subtotal = (hardware === null && servicios === null) ? null : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
-    const iva = subtotal === null ? null : parseFloat((subtotal * 0.16).toFixed(2));
-    const general = subtotal === null ? null : parseFloat((subtotal + (iva !== null ? iva : 0)).toFixed(2));
+    const iva = 0;
+    const general = subtotal;
 
     const validUUID = toValidUUID(record.id);
 
@@ -1295,7 +1333,20 @@ export async function pushCRMRecordToSupabase(
       etapa: record.etapa || null,
       nivel_termo: record.nivel_termo || record.status_proyecto || null,
       prioridad: record.prioridad !== undefined && record.prioridad !== null ? Number(record.prioridad) : 0,
-      estado: record.estado || record.estado_proyecto || null
+      estado: record.estado || record.estado_proyecto || null,
+      
+      // Nuevos campos
+      fecha_cambio_etapa: record.fecha_cambio_etapa || null,
+      stagnation_days_limit: record.stagnation_days_limit !== undefined && record.stagnation_days_limit !== null ? Number(record.stagnation_days_limit) : 5,
+      checklist_tasks: record.checklist_tasks || null,
+      __tareas: record.__tareas || [],
+      contacto_asignado_id: record.contacto_asignado_id || null,
+      responsable: record.responsable || null,
+      tags: record.tags || null,
+      contacto_nombre: record.contacto_nombre || null,
+      contacto_puesto: record.contacto_puesto || null,
+      contacto_email: record.contacto_email || null,
+      contacto_telefono: record.contacto_telefono || null
     };
 
     if (knownCRMTableColumns.includes('prioridad_nivel')) {
@@ -1331,7 +1382,20 @@ export async function pushCRMRecordToSupabase(
       prioridad: record.prioridad !== undefined && record.prioridad !== null ? Number(record.prioridad) : 0,
       etapa: record.etapa || null,
       nivel_termo: record.nivel_termo || record.status_proyecto || null,
-      estado: record.estado || record.estado_proyecto || null
+      estado: record.estado || record.estado_proyecto || null,
+      
+      // Nuevos campos
+      fecha_cambio_etapa: record.fecha_cambio_etapa || null,
+      stagnation_days_limit: record.stagnation_days_limit !== undefined && record.stagnation_days_limit !== null ? Number(record.stagnation_days_limit) : 5,
+      checklist_tasks: record.checklist_tasks || null,
+      __tareas: record.__tareas || [],
+      contacto_asignado_id: record.contacto_asignado_id || null,
+      responsable: record.responsable || null,
+      tags: record.tags || null,
+      contacto_nombre: record.contacto_nombre || null,
+      contacto_puesto: record.contacto_puesto || null,
+      contacto_email: record.contacto_email || null,
+      contacto_telefono: record.contacto_telefono || null
     };
 
     const payload: any = { id: validUUID };
@@ -1715,8 +1779,8 @@ export async function bulkUploadToSupabase(
       const hardware = Number(rec.total_hardware_cotizacion) || 0;
       const servicios = Number(rec.total_servicios_cotizacion) || 0;
       const subtotal = hardware + servicios;
-      const iva = parseFloat((subtotal * 0.16).toFixed(2));
-      const general = parseFloat((subtotal + iva).toFixed(2));
+      const iva = 0;
+      const general = subtotal;
       const validUUID = toValidUUID(rec.id);
 
       const standardPayload: any = {

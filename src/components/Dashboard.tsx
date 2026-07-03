@@ -52,24 +52,14 @@ export default function Dashboard({
     return local ? JSON.parse(local) : {};
   });
 
-  // Dynamic Toggle State for Demo or Real Visualization
-  const hasRealDataCount = records.filter(r => (r.total_subtotal_cotizacion || 0) > 0).length > 0;
-  const [visualizationMode, setVisualizationMode] = useState<'real' | 'demo'>(() => {
-    return hasRealDataCount ? 'real' : 'demo';
-  });
+  // Forced Real Visualization strictly consuming live database
+  const visualizationMode = 'real';
 
-  // Badge utility for Dynamic Real/Demo state transition as requested
+  // Badge utility representing active Supabase database connection
   const DemoBadge = () => {
-    if (visualizationMode === 'real') {
-      return (
-        <span className="ml-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-mono font-bold tracking-wider rounded border border-emerald-300 uppercase whitespace-nowrap">
-          DATO REAL
-        </span>
-      );
-    }
     return (
-      <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-mono font-bold tracking-wider rounded border border-amber-300 uppercase whitespace-nowrap animate-pulse">
-        DEMO
+      <span className="ml-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-mono font-bold tracking-wider rounded border border-emerald-300 uppercase whitespace-nowrap">
+        CONEXIÓN SUPABASE ACTIVA
       </span>
     );
   };
@@ -366,22 +356,6 @@ export default function Dashboard({
     1
   );
 
-  // Standard Mock Monthly Graph Data for seamless fallbacks
-  const fallbackGraphData = [
-    { name: 'Ene', salesPct: 65, targetPct: 66, hasProjection: false, projTop: 0, salesVal: 156000, projVal: 0 },
-    { name: 'Feb', salesPct: 75, targetPct: 75, hasProjection: false, projTop: 0, salesVal: 180000, projVal: 0 },
-    { name: 'Mar', salesPct: 85, targetPct: 83, hasProjection: false, projTop: 0, salesVal: 204000, projVal: 0 },
-    { name: 'Abr', salesPct: 35, targetPct: 66, hasProjection: false, projTop: 0, salesVal: 84000, projVal: 0 },
-    { name: 'May', salesPct: 45, targetPct: 91, hasProjection: false, projTop: 0, salesVal: 108000, projVal: 0 },
-    { name: 'Jun', salesPct: 55, targetPct: 91, hasProjection: false, projTop: 0, salesVal: 132000, projVal: 0 },
-    { name: 'Jul', salesPct: 0, targetPct: 100, hasProjection: true, projTop: 8, salesVal: 0, projVal: 450000 },
-    { name: 'Ago', salesPct: 0, targetPct: 100, hasProjection: true, projTop: 16, salesVal: 0, projVal: 420000 },
-    { name: 'Sep', salesPct: 0, targetPct: 87, hasProjection: true, projTop: 12, salesVal: 0, projVal: 380000 },
-    { name: 'Oct', salesPct: 0, targetPct: 87, hasProjection: true, projTop: 24, salesVal: 0, projVal: 340000 },
-    { name: 'Nov', salesPct: 0, targetPct: 75, hasProjection: true, projTop: 8, salesVal: 0, projVal: 220000 },
-    { name: 'Dic', salesPct: 0, targetPct: 75, hasProjection: true, projTop: 16, salesVal: 0, projVal: 200000 },
-  ];
-
   const computedGraphData = monthlyValuesData.map(m => {
     const targetPct = Math.min(100, Math.round((m.target / maxMonthValue) * 100));
     const salesPct = m.target > 0 ? Math.min(100, Math.round((m.sales / m.target) * 100)) : 0;
@@ -399,7 +373,7 @@ export default function Dashboard({
     };
   });
 
-  const activeGraphData = hasRealData ? computedGraphData : fallbackGraphData;
+  const activeGraphData = computedGraphData;
 
   // Dynamic Chart 2 Quarterly Stacked data
   const targetYearNum = parseInt(selectedYear, 10);
@@ -481,23 +455,13 @@ export default function Dashboard({
     };
   });
 
-  const fallbackQuarters = [
-    { label: '2025-Q3', coolPct: 20, warmPct: 15, hotPct: 0, emptyPct: 40, coolVal: 150000, warmVal: 120000, hotVal: 0, heightPct: 65 },
-    { label: '2025-Q4', coolPct: 25, warmPct: 5, hotPct: 0, emptyPct: 50, coolVal: 200000, warmVal: 40000, hotVal: 0, heightPct: 75 },
-    { label: '2026-Q1', coolPct: 30, warmPct: 0, hotPct: 0, emptyPct: 70, coolVal: 240000, warmVal: 0, hotVal: 0, heightPct: 75 },
-    { label: '2026-Q2', coolPct: 40, warmPct: 20, hotPct: 15, emptyPct: 25, coolVal: 320000, warmVal: 160000, hotVal: 120000, heightPct: 91 },
-    { label: '2026-Q3', coolPct: 30, warmPct: 15, hotPct: 0, emptyPct: 55, coolVal: 240000, warmVal: 120000, hotVal: 0, heightPct: 79 },
-    { label: '2026-Q4', coolPct: 40, warmPct: 0, hotPct: 0, emptyPct: 60, coolVal: 320000, warmVal: 0, hotVal: 0, heightPct: 83 },
-    { label: '2027-Q1', coolPct: 20, warmPct: 0, hotPct: 0, emptyPct: 80, coolVal: 150000, warmVal: 0, hotVal: 0, heightPct: 65 },
-  ];
-
-  const finalQuarters = hasRealData ? activeQuarterPercentages : fallbackQuarters;
+  const finalQuarters = activeQuarterPercentages;
 
   // Dynamic Chart 4 sales representative quotas
   const actualResponsibles = Array.from(new Set(
     records.map(r => kanbanMeta[r.id]?.responsable).filter(Boolean)
   )) as string[];
-  const finalResponsiblesList = actualResponsibles.length > 0 ? actualResponsibles : ["Carlos M.", "Ana R.", "Luis T.", "Sofía V."];
+  const finalResponsiblesList = actualResponsibles;
 
   const salesmenComputed = finalResponsiblesList.map(name => {
     const assignedRecords = records.filter(r => kanbanMeta[r.id]?.responsable === name);
@@ -526,14 +490,7 @@ export default function Dashboard({
     };
   });
 
-  const fallbackSalesmen = [
-    { name: 'Carlos M.', won: 467000, target: 800000, percentage: 58, activeCount: 6 },
-    { name: 'Ana R.', won: 310000, target: 600000, percentage: 52, activeCount: 4 },
-    { name: 'Luis T.', won: 180000, target: 500000, percentage: 36, activeCount: 8 },
-    { name: 'Sofía V.', won: 420000, target: 700000, percentage: 60, activeCount: 5 },
-  ];
-
-  const finalSalesmenList = hasRealData ? salesmenComputed : fallbackSalesmen;
+  const finalSalesmenList = salesmenComputed;
 
   // Dynamic Chart 5 Lead conversion source
   const sourceRawCounts = { Referidos: 0, Web: 0, LinkedIn: 0, Eventos: 0, Outbound: 0, Partners: 0 };
@@ -547,21 +504,13 @@ export default function Dashboard({
     else sourceRawCounts.Outbound++;
   });
 
-  const totalSourcesCount = Object.values(sourceRawCounts).reduce((a,b)=> a+b, 0);
-  const sourcesDisplay = totalSourcesCount > 0 ? {
+  const sourcesDisplay = {
     Referidos: sourceRawCounts.Referidos,
     Web: sourceRawCounts.Web,
     LinkedIn: sourceRawCounts.LinkedIn,
     Eventos: sourceRawCounts.Eventos,
     Outbound: sourceRawCounts.Outbound,
     Partners: sourceRawCounts.Partners,
-  } : {
-    Referidos: 12,
-    Web: 28,
-    LinkedIn: 8,
-    Eventos: 6,
-    Outbound: 20,
-    Partners: 4,
   };
   const maxSourceVal = Math.max(...Object.values(sourcesDisplay), 1);
 
@@ -703,35 +652,6 @@ export default function Dashboard({
 
         {/* Controls exactly as shown in the mockup */}
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Interactive Mode Selector: Demo vs Real */}
-          <div className="flex border border-slate-300 rounded-lg p-0.5 bg-slate-100 items-center gap-0.5" id="visualization-mode-toggle-group">
-            <button
-              id="view-mode-real-btn"
-              onClick={() => setVisualizationMode('real')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-md transition duration-200 flex items-center gap-1.5 ${
-                visualizationMode === 'real'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-200'
-              }`}
-              title="Mostrar datos reales capturados en el CRM"
-            >
-              <CheckCircle className="w-3.5 h-3.5" />
-              Real
-            </button>
-            <button
-              id="view-mode-demo-btn"
-              onClick={() => setVisualizationMode('demo')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-md transition duration-200 flex items-center gap-1.5 ${
-                visualizationMode === 'demo'
-                  ? 'bg-amber-500 text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-200'
-              }`}
-              title="Mostrar modelo de demostración comercial con datos enriquecidos"
-            >
-              <BarChart2 className="w-3.5 h-3.5 animate-pulse" />
-              Demo
-            </button>
-          </div>
 
           <select 
             value={selectedYear} 

@@ -1306,6 +1306,7 @@ export default function App() {
                 records={records}
                 contacts={contacts}
                 role={role}
+                dbUsers={dbUsers}
                 onAddRecord={(nRecord) => {
                   setRecords((prev) => [nRecord, ...prev]);
                   syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');

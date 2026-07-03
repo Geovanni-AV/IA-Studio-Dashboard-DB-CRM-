@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { CRMRecord, UserRole, FollowupEntry, Contact } from '../types';
+import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID } from '../supabaseService';
 import { 
@@ -33,13 +33,16 @@ import {
   Tag,
   Settings,
   GripVertical,
-  Check
+  Check,
+  MessageSquare,
+  History
 } from 'lucide-react';
 
 interface LeadsSectionProps {
   records: CRMRecord[];
   contacts?: Contact[];
   role: UserRole;
+  dbUsers?: UserAccount[];
   onAddRecord: (record: CRMRecord) => void;
   onUpdateRecord: (record: CRMRecord) => void;
   onDeleteRecord: (id: string) => void;
@@ -76,32 +79,30 @@ interface KanbanMeta {
   tags: string[];
   motivoCierre?: string;
   notasCierre?: string;
+  stagnation_days_limit?: number;
 }
 
 export default function LeadsSection({
   records,
   contacts = [],
   role,
+  dbUsers = [],
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
   onShowAudit
 }: LeadsSectionProps) {
-  // Dynamic user assignment resolving from active session & registered commercial contacts
+  // Dynamic user assignment resolving from registered database users (strictly from the "Usuarios" table)
   const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
   const activeSessionUserName = isUserSaved ? JSON.parse(isUserSaved)?.name : 'Geovanni Andrade';
 
-  const registeredCommercial = (contacts || [])
-    .filter(c => c.esEnlaceComercial === true)
-    .map(c => c.nombre);
+  const registeredCommercial = (dbUsers || [])
+    .filter(u => u.estado === 'active')
+    .map(u => u.nombre);
 
   const RESPONSIBLES = registeredCommercial.length > 0
-    ? Array.from(new Set([
-        activeSessionUserName,
-        'Geovanni Andrade',
-        ...registeredCommercial
-      ])).filter(Boolean) as string[]
-    : ["Alex Mercer", "Laura Ventas", "Carlos Consultor", "Sofía Torres", "Andrés Ruiz", "Geovanni Andrade"];
+    ? Array.from(new Set(registeredCommercial)).filter(Boolean) as string[]
+    : ["Geovanni Andrade"];
 
   // Filtering & Search states
   const [searchTerm, setSearchTerm] = useState('');
@@ -175,6 +176,12 @@ export default function LeadsSection({
   // Active drawer card ID
   const [activeDrawerRecordId, setActiveDrawerRecordId] = useState<string | null>(null);
 
+  // States for interactive timeline log entry
+  const [newFollowupNotes, setNewFollowupNotes] = useState('');
+  const [newFollowupMethod, setNewFollowupMethod] = useState('Llamada Telefónica');
+  const [editingFollowupId, setEditingFollowupId] = useState<string | null>(null);
+  const [editingFollowupNotes, setEditingFollowupNotes] = useState<string>('');
+
   // HTML5 Drag states / close modal states
   const [pendingDrag, setPendingDrag] = useState<{
     recordId: string;
@@ -198,6 +205,42 @@ export default function LeadsSection({
   useEffect(() => {
     localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(kanbanMeta));
   }, [kanbanMeta]);
+
+  const [draftRecord, setDraftRecord] = useState<CRMRecord | null>(null);
+  const [draftMeta, setDraftMeta] = useState<KanbanMeta | null>(null);
+
+  useEffect(() => {
+    if (activeDrawerRecordId) {
+      const card = records.find(r => r.id === activeDrawerRecordId);
+      if (card) {
+        const cloned = JSON.parse(JSON.stringify(card));
+        if (cloned.acciones_seguimiento) {
+          cloned.acciones_seguimiento = cloned.acciones_seguimiento.map((item: any, fIdx: number) => ({
+            id: item.id || `f-${fIdx}-${Date.now()}`,
+            fecha: item.fecha || getMexicoCityDateString(),
+            tipo: item.tipo || 'Llamada Telefónica',
+            creador: item.creador || 'Geovanni Andrade',
+            notas: item.notas || ''
+          }));
+        }
+        setDraftRecord(cloned);
+
+        const existingMeta = kanbanMeta[activeDrawerRecordId];
+        const meta: KanbanMeta = existingMeta || {
+          stage: card.etapa || 'Nuevo',
+          dateEnteredStage: card.fecha_cambio_etapa || card.fecha_registro || getMexicoCityDateString(),
+          responsable: card.responsable || '',
+          subtasks: Array.isArray(card.__tareas) ? card.__tareas : [],
+          tags: card.tags ? card.tags.split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+          stagnation_days_limit: card.stagnation_days_limit !== undefined && card.stagnation_days_limit !== null ? Number(card.stagnation_days_limit) : 5
+        };
+        setDraftMeta(JSON.parse(JSON.stringify(meta)));
+      }
+    } else {
+      setDraftRecord(null);
+      setDraftMeta(null);
+    }
+  }, [activeDrawerRecordId, records, kanbanMeta]);
 
   // Helper to map a standard/default stage name to the corresponding customized/active column in kanbanColumns
   const resolveStageName = (defaultStage: string): string => {
@@ -259,7 +302,7 @@ export default function LeadsSection({
       const mockTags = ['Renovación', 'Riesgo', 'SAT / ISO', 'Urgente', 'B2B Tech', 'SaaS', 'Planta Crítica'];
 
       records.forEach((r, idx) => {
-        const currentStage = updatedMeta[r.id]?.stage;
+        const currentMeta = updatedMeta[r.id];
         let defaultTarget: string | null = null;
 
         // 1. Determine the expected default stage based on r.etapa, or r.estado_proyecto & r.status_proyecto
@@ -282,8 +325,8 @@ export default function LeadsSection({
             const customNuevo = resolveStageName('Nuevo');
             const customContactado = resolveStageName('Contactado');
             const customCotizado = resolveStageName('Cotizado');
-            if (currentStage === customNuevo || currentStage === customContactado || currentStage === customCotizado) {
-              defaultTarget = getDefaultStageForCustom(currentStage);
+            if (currentMeta?.stage === customNuevo || currentMeta?.stage === customContactado || currentMeta?.stage === customCotizado) {
+              defaultTarget = getDefaultStageForCustom(currentMeta.stage);
             } else {
               defaultTarget = 'Nuevo';
             }
@@ -294,8 +337,8 @@ export default function LeadsSection({
           else if (r.status_proyecto === 'Warm') defaultTarget = 'Contactado';
           else if (r.status_proyecto === 'Cool') defaultTarget = 'Nuevo';
           else {
-            if (currentStage) {
-              defaultTarget = getDefaultStageForCustom(currentStage);
+            if (currentMeta?.stage) {
+              defaultTarget = getDefaultStageForCustom(currentMeta.stage);
             } else {
               defaultTarget = 'Nuevo';
             }
@@ -308,43 +351,80 @@ export default function LeadsSection({
         // Resolve default stage to active custom column name
         const targetStage = resolveStageName(defaultTarget);
 
+        // Parse checklist_tasks from DB
+        let dbSubtasks: any[] | null = null;
+        if (r.checklist_tasks) {
+          try {
+            const parsed = JSON.parse(r.checklist_tasks);
+            if (Array.isArray(parsed)) {
+              dbSubtasks = parsed.map((item: any, sidx: number) => ({
+                id: item.id || `s-db-${idx}-${sidx}-${Date.now()}`,
+                text: String(item.text || ''),
+                completed: !!item.completed
+              }));
+            }
+          } catch (e) {
+            // Fallback if not valid JSON
+          }
+        }
+
+        // Parse tags from DB
+        let dbTags: string[] | null = null;
+        if (r.tags) {
+          try {
+            const parsed = JSON.parse(r.tags);
+            if (Array.isArray(parsed)) {
+              dbTags = parsed.map(String);
+            }
+          } catch (e) {
+            dbTags = String(r.tags).split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+          }
+        }
+
+        const resolvedResponsable = r.responsable || null;
+        const resolvedDateEntered = r.fecha_cambio_etapa || r.fecha_registro || getMexicoCityDateString();
+        const resolvedStagnationLimit = r.stagnation_days_limit !== undefined && r.stagnation_days_limit !== null ? Number(r.stagnation_days_limit) : 5;
+
         // 2. If it's a completely new card in kanbanMeta
-        if (!updatedMeta[r.id]) {
-          const dateStr = getMexicoCityDateString();
-
-          const resp = mockResponsables[idx % mockResponsables.length];
-          const subtaskTexts = defaultTarget === 'Nuevo' ? ["Establecer contacto inicial", "Agendar llamada Zoom", "Documentar requerimientos"]
-            : defaultTarget === 'Contactado' ? ["Enviar correo introductorio", "Calificar presupuesto", "Identificar decisores"]
-            : defaultTarget === 'Cotizado' ? ["Estructurar cotización de hardware", "Revisar costos servicios", "Propuesta preliminar", "Registrar SAT"]
-            : defaultTarget === 'Negociación' ? ["Ajustar margen", "Revisión gerencial", "Enviar minuta", "Validar planta"]
-            : ["Alta sistema SAP", "Solicitar folio OC", "Firma de contrato de prestación"];
-
-          const subtasks = subtaskTexts.map((txt, sidx) => ({
-            id: `s-${idx}-${sidx}`,
-            text: txt,
-            completed: sidx < (idx % subtaskTexts.length)
-          }));
-
-          const tags: string[] = [];
-          if (idx % 2 === 0) tags.push(mockTags[idx % mockTags.length]);
-          if (idx % 3 === 0) tags.push(mockTags[(idx + 2) % mockTags.length]);
-
+        if (!currentMeta) {
           updatedMeta[r.id] = {
             stage: targetStage,
-            dateEnteredStage: dateStr,
-            responsable: resp,
-            subtasks,
-            tags
+            dateEnteredStage: resolvedDateEntered,
+            responsable: resolvedResponsable,
+            subtasks: dbSubtasks || [],
+            tags: dbTags || [],
+            stagnation_days_limit: resolvedStagnationLimit
           };
           anyChange = true;
         } else {
-          // 3. For existing cards, if the targetStage changed due to outside database / manual updates, update automatically
-          if (currentStage !== targetStage) {
-            updatedMeta[r.id] = {
-              ...updatedMeta[r.id],
-              stage: targetStage,
-              dateEnteredStage: getMexicoCityDateString()
-            };
+          // 3. For existing cards, check if DB state changed or we need to update
+          let metaChanged = false;
+          const newMetaState = { ...currentMeta };
+
+          if (currentMeta.stage !== targetStage) {
+            newMetaState.stage = targetStage;
+            newMetaState.dateEnteredStage = resolvedDateEntered;
+            metaChanged = true;
+          }
+          if (r.responsable && currentMeta.responsable !== r.responsable) {
+            newMetaState.responsable = r.responsable;
+            metaChanged = true;
+          }
+          if (dbSubtasks && JSON.stringify(currentMeta.subtasks) !== JSON.stringify(dbSubtasks)) {
+            newMetaState.subtasks = dbSubtasks;
+            metaChanged = true;
+          }
+          if (dbTags && JSON.stringify(currentMeta.tags) !== JSON.stringify(dbTags)) {
+            newMetaState.tags = dbTags;
+            metaChanged = true;
+          }
+          if (r.stagnation_days_limit !== undefined && r.stagnation_days_limit !== null && currentMeta.stagnation_days_limit !== resolvedStagnationLimit) {
+            newMetaState.stagnation_days_limit = resolvedStagnationLimit;
+            metaChanged = true;
+          }
+
+          if (metaChanged) {
+            updatedMeta[r.id] = newMetaState;
             anyChange = true;
           }
         }
@@ -397,8 +477,6 @@ export default function LeadsSection({
   const [filterSearch, setFilterSearch] = useState<string>('');
   
   // Custom modal states for delete confirmation and PDF trigger
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [recordToDelete, setRecordToDelete] = useState<{ id: string; folio: string } | null>(null);
   const [pdfPromptOpen, setPdfPromptOpen] = useState(false);
   const [pdfPromptRecord, setPdfPromptRecord] = useState<CRMRecord | null>(null);
   
@@ -407,13 +485,13 @@ export default function LeadsSection({
   const [iva, setIva] = useState(0);
   const [total, setTotal] = useState(0);
 
-  // Auto Calculations
+  // Auto Calculations - Deactivated 16% VAT auto-calculation to preserve exact quote amounts
   useEffect(() => {
     const hw = formHardware === '' ? 0 : Number(formHardware);
     const serv = formServicios === '' ? 0 : Number(formServicios);
     const calculatedSubtotal = hw + serv;
-    const calculatedIva = calculatedSubtotal * 0.16;
-    const calculatedTotal = calculatedSubtotal + calculatedIva;
+    const calculatedIva = 0;
+    const calculatedTotal = calculatedSubtotal;
     
     setSubtotal(calculatedSubtotal);
     setIva(calculatedIva);
@@ -443,9 +521,9 @@ export default function LeadsSection({
     setFormPais('México');
     setFormUbicacion('');
     setFormProyecto('');
-    setFormLinkCotizacion('https://drive.google.com/file/d/new_quote_ref');
-    setFormHardware(5000);
-    setFormServicios(2000);
+    setFormLinkCotizacion('');
+    setFormHardware(0);
+    setFormServicios(0);
     setFormMoneda('USD');
     setFormStatus(null);
     setFormNotas('');
@@ -453,28 +531,13 @@ export default function LeadsSection({
     setIsFormOpen(true);
   };
 
-  // Open Form for editing
+  // Open Advanced Sliding Drawer for editing
   const handleOpenEditMode = (rec: CRMRecord) => {
     if (role === 'Solo Lectura') {
       alert(`Acceso denegado: El perfil "${role}" tiene bloqueada la edición.`);
       return;
     }
-    setIsEditing(true);
-    setFormId(rec.id);
-    setFormFolio(rec.informacion_general_folio || '');
-    setFormCliente(rec.informacion_general_cliente || '');
-    setFormPlanta(rec.informacion_general_planta || '');
-    setFormPais(rec.cliente_pais || 'México');
-    setFormUbicacion(rec.cliente_ubicacion || '');
-    setFormProyecto(rec.informacion_general_proyecto || '');
-    setFormLinkCotizacion(rec.informacion_general_link_cotizacion || '');
-    setFormHardware(rec.total_hardware_cotizacion !== null && rec.total_hardware_cotizacion !== undefined ? rec.total_hardware_cotizacion : '');
-    setFormServicios(rec.total_servicios_cotizacion !== null && rec.total_servicios_cotizacion !== undefined ? rec.total_servicios_cotizacion : '');
-    setFormMoneda(rec.informacion_general_moneda);
-    setFormStatus(rec.estado_proyecto || null);
-    setFormNotas(rec.notas_comerciales || '');
-    setFormSustituye(rec.sustituye_folio_anterior || '');
-    setIsFormOpen(true);
+    setActiveDrawerRecordId(rec.id);
   };
 
   // Delete Action triggered by clicking the trash button
@@ -483,20 +546,21 @@ export default function LeadsSection({
       alert(`🔒 Acción Bloqueada: El rol actual "${role}" no tiene privilegios para eliminar folios definitivos.`);
       return;
     }
-    setRecordToDelete({ id, folio });
-    setDeleteConfirmOpen(true);
+    setPendingDrag({ recordId: id, targetStage: '', sourceStage: '', type: 'delete' });
   };
 
   const handleConfirmDeleteActual = () => {
-    if (recordToDelete) {
-      const fullRecord = records.find(r => r.id === recordToDelete.id);
-      const extraInfo = fullRecord 
-        ? ` (${fullRecord.informacion_general_cliente || 'N/A'} - ${fullRecord.informacion_general_proyecto || 'N/A'})` 
-        : '';
-      onDeleteRecord(recordToDelete.id);
-      onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${recordToDelete.folio}${extraInfo} permanentemente.`);
-      setDeleteConfirmOpen(false);
-      setRecordToDelete(null);
+    if (pendingDrag && pendingDrag.type === 'delete') {
+      const recordId = pendingDrag.recordId;
+      const r = records.find(rec => rec.id === recordId);
+      if (r) {
+        const extraInfo = r.informacion_general_cliente || r.informacion_general_proyecto
+          ? ` (${r.informacion_general_cliente || 'N/A'} - ${r.informacion_general_proyecto || 'N/A'})`
+          : '';
+        onDeleteRecord(recordId);
+        onShowAudit('ELIMINACIÓN', `Eliminó registro comercial con Folio ${r.informacion_general_folio}${extraInfo} permanentemente.`);
+      }
+      setPendingDrag(null);
     }
   };
 
@@ -561,7 +625,16 @@ export default function LeadsSection({
       etapa: existingRec?.etapa || (formStatus ? resolveStageName(formStatus) : 'Nuevo'),
       nivel_termo: nextStatusProyecto || null,
       prioridad: existingRec?.prioridad ?? 0,
-      estado: formStatus || null
+      estado: formStatus || null,
+      
+      // Preservar metadatos al editar desde este formulario
+      fecha_cambio_etapa: existingRec?.fecha_cambio_etapa || null,
+      stagnation_days_limit: existingRec?.stagnation_days_limit || 5,
+      checklist_tasks: existingRec?.checklist_tasks || null,
+      __tareas: existingRec?.__tareas || [],
+      contacto_asignado_id: existingRec?.contacto_asignado_id || null,
+      responsable: existingRec?.responsable || null,
+      tags: existingRec?.tags || null
     };
 
     if (isEditing) {
@@ -755,10 +828,22 @@ export default function LeadsSection({
         });
       }
       else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
+      else if (colKey === 'responsable') val = kanbanMeta[r.id]?.responsable || r.responsable;
       else if (colKey === 'status') val = r.estado_proyecto;
       else if (colKey === 'level') val = getTemperature(r);
       else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
-      else if (colKey === 'oc') val = r.link_orden_compra;
+      else if (colKey === 'actions_history') val = r.acciones_seguimiento?.length ? `${r.acciones_seguimiento.length} acciones` : null;
+      else if (colKey === 'checklist_progress') {
+        const meta = kanbanMeta[r.id];
+        let subtasks = [];
+        if (meta && meta.subtasks) {
+          subtasks = meta.subtasks;
+        } else if (r.checklist_tasks) {
+          try { subtasks = JSON.parse(r.checklist_tasks); } catch (e) {}
+        }
+        const completed = subtasks.filter((s: any) => s.completed).length;
+        val = subtasks.length > 0 ? `${completed}/${subtasks.length} tareas` : null;
+      }
 
       let labelToCheck = '';
       if (val === null || val === undefined || String(val).trim() === '') {
@@ -790,10 +875,22 @@ export default function LeadsSection({
         });
       }
       else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
+      else if (colKey === 'responsable') val = kanbanMeta[r.id]?.responsable || r.responsable;
       else if (colKey === 'status') val = r.estado_proyecto;
       else if (colKey === 'level') val = getTemperature(r);
       else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
-      else if (colKey === 'oc') val = r.link_orden_compra;
+      else if (colKey === 'actions_history') val = r.acciones_seguimiento?.length ? `${r.acciones_seguimiento.length} acciones` : null;
+      else if (colKey === 'checklist_progress') {
+        const meta = kanbanMeta[r.id];
+        let subtasks = [];
+        if (meta && meta.subtasks) {
+          subtasks = meta.subtasks;
+        } else if (r.checklist_tasks) {
+          try { subtasks = JSON.parse(r.checklist_tasks); } catch (e) {}
+        }
+        const completed = subtasks.filter((s: any) => s.completed).length;
+        val = subtasks.length > 0 ? `${completed}/${subtasks.length} tareas` : null;
+      }
 
       if (val === null || val === undefined || String(val).trim() === '') {
         return 'null y campos faltantes';
@@ -924,6 +1021,9 @@ export default function LeadsSection({
     } else if (sortColumn === 'stage') {
       valA = kanbanMeta[a.id]?.stage || resolveStageName('Nuevo');
       valB = kanbanMeta[b.id]?.stage || resolveStageName('Nuevo');
+    } else if (sortColumn === 'responsable') {
+      valA = kanbanMeta[a.id]?.responsable || a.responsable || '';
+      valB = kanbanMeta[b.id]?.responsable || b.responsable || '';
     } else if (sortColumn === 'level') {
       const getPriorityValue = (temp: string) => {
         if (temp === 'Win') return 4;
@@ -936,9 +1036,25 @@ export default function LeadsSection({
     } else if (sortColumn === 'actions_followup') {
       valA = a.acciones_seguimiento?.[0]?.notas || '';
       valB = b.acciones_seguimiento?.[0]?.notas || '';
-    } else if (sortColumn === 'oc') {
-      valA = a.link_orden_compra || '';
-      valB = b.link_orden_compra || '';
+    } else if (sortColumn === 'actions_history') {
+      valA = a.acciones_seguimiento?.length || 0;
+      valB = b.acciones_seguimiento?.length || 0;
+    } else if (sortColumn === 'checklist_progress') {
+      const getPct = (rec: CRMRecord) => {
+        const meta = kanbanMeta[rec.id];
+        let subtasks = [];
+        if (meta && meta.subtasks) {
+          subtasks = meta.subtasks;
+        } else if (rec.checklist_tasks) {
+          try { subtasks = JSON.parse(rec.checklist_tasks); } catch (e) {}
+        }
+        const total = subtasks.length;
+        if (total === 0) return 0;
+        const completed = subtasks.filter((s: any) => s.completed).length;
+        return completed / total;
+      };
+      valA = getPct(a);
+      valB = getPct(b);
     }
 
     if (typeof valA === 'string') {
@@ -979,16 +1095,18 @@ export default function LeadsSection({
 
   // helper to lock precise column widths across headers & row metrics
   const getColWidthClass = (colKey: string) => {
-    if (colKey === 'folio') return 'w-[8%] min-w-[85px] max-w-[95px]';
-    if (colKey === 'client') return 'w-[12%] min-w-[110px] max-w-[130px]';
-    if (colKey === 'plant') return 'w-[12%] min-w-[110px] max-w-[130px]';
-    if (colKey === 'project') return 'w-[15%] min-w-[140px] max-w-[190px]';
-    if (colKey === 'amount') return 'w-[10%] min-w-[95px] max-w-[110px]';
-    if (colKey === 'stage') return 'w-[9%] min-w-[100px] max-w-[115px]';
-    if (colKey === 'status') return 'w-[9%] min-w-[100px] max-w-[115px]';
-    if (colKey === 'level') return 'w-[8%] min-w-[95px] max-w-[110px]';
-    if (colKey === 'actions_followup') return 'w-[15%] min-w-[140px] max-w-[185px]';
-    if (colKey === 'oc') return 'w-[11%] min-w-[115px] max-w-[145px]';
+    if (colKey === 'folio') return 'w-[6%] min-w-[70px] max-w-[85px]';
+    if (colKey === 'client') return 'w-[10%] min-w-[95px] max-w-[115px]';
+    if (colKey === 'plant') return 'w-[10%] min-w-[95px] max-w-[115px]';
+    if (colKey === 'project') return 'w-[13%] min-w-[125px] max-w-[160px]';
+    if (colKey === 'amount') return 'w-[8%] min-w-[80px] max-w-[95px]';
+    if (colKey === 'stage') return 'w-[8%] min-w-[85px] max-w-[100px]';
+    if (colKey === 'responsable') return 'w-[8%] min-w-[85px] max-w-[100px]';
+    if (colKey === 'status') return 'w-[8%] min-w-[85px] max-w-[100px]';
+    if (colKey === 'level') return 'w-[6%] min-w-[75px] max-w-[90px]';
+    if (colKey === 'actions_followup') return 'w-[10%] min-w-[100px] max-w-[125px]';
+    if (colKey === 'actions_history') return 'w-[10%] min-w-[100px] max-w-[125px]';
+    if (colKey === 'checklist_progress') return 'w-[8%] min-w-[85px] max-w-[105px]';
     return '';
   };
 
@@ -2025,10 +2143,10 @@ export default function LeadsSection({
                   ) : (
                     cards.map((card) => {
                       const meta = kanbanMeta[card.id] || {
-                        stage: 'Nuevo',
-                        dateEnteredStage: '2026-06-14',
-                        responsable: 'Alex Mercer',
-                        subtasks: [],
+                        stage: card.etapa || 'Nuevo',
+                        dateEnteredStage: card.fecha_cambio_etapa || card.fecha_registro || getMexicoCityDateString(),
+                        responsable: card.responsable || '',
+                        subtasks: Array.isArray(card.__tareas) ? card.__tareas : [],
                         tags: []
                       };
                       
@@ -2058,9 +2176,19 @@ export default function LeadsSection({
                       };
                       const overdue = checkFollowupOverdue();
 
+                      const stagLimit = meta.stagnation_days_limit || 5;
+                      const isStalled = days >= stagLimit;
+
+                      // Last interaction notes
+                      const lastInteraction = card.acciones_seguimiento && card.acciones_seguimiento.length > 0
+                        ? card.acciones_seguimiento[card.acciones_seguimiento.length - 1]
+                        : null;
+
                       // Checklist stats
                       const completedCount = meta.subtasks.filter(s => s.completed).length;
                       const hasSubtasks = meta.subtasks.length > 0;
+                      const totalCount = meta.subtasks.length;
+                      const allCompleted = hasSubtasks && completedCount === totalCount;
 
                       // Level left color-code bar
                       const getTemperatureLeftBar = (temp: string | null | undefined) => {
@@ -2070,6 +2198,41 @@ export default function LeadsSection({
                           case 'Cool': return 'border-l-sky-500';
                           case 'Win': return 'border-l-emerald-500';
                           default: return 'border-l-slate-400';
+                        }
+                      };
+
+                      const renderTemperaturePill = (status: string | null | undefined) => {
+                        switch (status) {
+                          case 'Hot':
+                            return (
+                              <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
+                                <span>🔥</span> HOT
+                              </span>
+                            );
+                          case 'Warm':
+                            return (
+                              <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">
+                                <span>⚡</span> WARM
+                              </span>
+                            );
+                          case 'Cool':
+                            return (
+                              <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200">
+                                <span>❄️</span> COOL
+                              </span>
+                            );
+                          case 'Win':
+                            return (
+                              <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                                <span>🏆</span> WIN
+                              </span>
+                            );
+                          default:
+                            return (
+                              <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                                <span>❓</span> S/D
+                              </span>
+                            );
                         }
                       };
 
@@ -2084,56 +2247,98 @@ export default function LeadsSection({
                           onClick={() => {
                             setActiveDrawerRecordId(card.id);
                           }}
-                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-2 ${
+                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-3 ${
                             draggingCardId === card.id ? 'opacity-40 scale-[0.98]' : ''
                           } ${
                             draggedOverCardId === card.id ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/10 scale-[1.01]' : ''
                           }`}
                         >
-                          <div>
-                            {/* PROJECT TITLE - main focus, with folio */}
-                            <div className="flex items-start justify-between gap-1.5">
-                              <h5 className="text-[12px] font-bold text-slate-800 leading-snug line-clamp-2">
-                                {card.informacion_general_proyecto || 'Sin descripción de proyecto'}
+                          {/* ZONA 1: Identidad & Prioridad */}
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div>
+                              <h5 className="text-[12px] font-bold text-slate-900 leading-snug line-clamp-1">
+                                {card.informacion_general_cliente || 'Cliente sin asignar'}
                               </h5>
-                              <span className="text-[9px] text-slate-400 font-mono font-bold bg-slate-100 px-1 rounded shrink-0" title="Folio del proyecto">
-                                {card.informacion_general_folio || 'S/F'}
+                              <span className="text-[10px] text-slate-400 font-mono font-bold mt-0.5 inline-block" title="Folio del proyecto">
+                                #{card.informacion_general_folio || 'S/F'}
                               </span>
                             </div>
+                            <div className="shrink-0">
+                              {renderTemperaturePill(card.status_proyecto)}
+                            </div>
+                          </div>
 
-                            {/* CLIENT row */}
-                            <p className="text-[11px] text-slate-500 truncate mt-0.5 font-medium">
-                              {card.informacion_general_cliente || 'Cliente sin asignar'}
+                          {/* ZONA 2: Núcleo del Proyecto */}
+                          <div className="space-y-1">
+                            <h6 className="text-[11.5px] font-medium text-slate-700 leading-snug line-clamp-2">
+                              {card.informacion_general_proyecto || <span className="italic text-slate-400">Sin descripción de proyecto</span>}
+                            </h6>
+                            <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                              <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{card.informacion_general_planta || 'Planta sin asignar'}</span>
                             </p>
+                          </div>
 
-                            {/* PROJECT DESCRIPTION SUMMARY (resumen de que trata el proyecto) */}
-                            {card.notas_comerciales && card.notas_comerciales.trim() && (
-                              <p className="text-[10px] text-slate-500 line-clamp-2 mt-1.5 leading-normal italic bg-slate-50/70 p-1.5 rounded border border-slate-100">
-                                {card.notas_comerciales}
-                              </p>
+                          {/* ZONA 3: Valor & Último Contacto */}
+                          <div className="space-y-2">
+                            {/* Valor (Subtotal) */}
+                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 flex items-center justify-between">
+                              <span className="text-[10px] text-slate-500 font-medium">Subtotal:</span>
+                              <span className="text-xs font-extrabold text-slate-800">
+                                ${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {card.informacion_general_moneda || 'USD'}
+                              </span>
+                            </div>
+                            
+                            {/* Último Contacto */}
+                            {lastInteraction ? (
+                              <div className="flex items-start gap-1 text-[10px] text-slate-500 italic bg-slate-50/70 border border-slate-100/70 rounded-lg p-2 leading-relaxed">
+                                <MessageSquare className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                                <span className="line-clamp-2">{lastInteraction.notas}</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 text-[10px] text-slate-400 italic bg-slate-50/30 border border-dashed border-slate-150 rounded-lg p-2">
+                                <MessageSquare className="w-3 h-3 shrink-0 text-slate-300" />
+                                <span>Sin interacciones registradas</span>
+                              </div>
                             )}
                           </div>
 
-                          {/* FINANCIAL INFORMATION: Subtotal */}
-                          <div className="mt-1 pb-1 flex flex-col gap-0.5 text-[11px] text-slate-600 bg-slate-50/40 p-1.5 rounded-lg border border-slate-100">
-                            <div className="flex justify-between">
-                              <span className="text-slate-500 font-medium text-[10px]">Subtotal Proyecto:</span>
-                              <span className="font-bold text-slate-905">${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {card.informacion_general_moneda || 'USD'}</span>
-                            </div>
-                          </div>
-
-                          {/* FOOTER ROW: days badge + temp badge + owner avatar, compact */}
-                          <div className="mt-1 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
-                                <Clock className="w-3 h-3" />
-                                {days}d
-                              </span>
-
-                              {(overdue || (hasSubtasks && completedCount < meta.subtasks.length)) && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-500" title={overdue ? 'Seguimiento atrasado' : 'Tareas pendientes'} />
+                          {/* ZONA 4: Operaciones & Indicadores */}
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {/* Checklist Progress */}
+                              {hasSubtasks && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex items-center gap-1 ${
+                                  allCompleted 
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}>
+                                  <CheckSquare className="w-3 h-3" />
+                                  <span>{completedCount}/{totalCount}</span>
+                                </span>
                               )}
 
+                              {/* Stagnation Badge / Alert */}
+                              {isStalled ? (
+                                <span className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-md animate-pulse" title={`Días en etapa supera límite de ${stagLimit} días`}>
+                                  <Clock className="w-3 h-3 text-red-600 shrink-0" />
+                                  <span>⚠️ Estancado {days}d</span>
+                                </span>
+                              ) : (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
+                                  <Clock className="w-3 h-3" />
+                                  <span>{days}d</span>
+                                </span>
+                              )}
+
+                              {/* Overdue alert indicator */}
+                              {overdue && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" title="Seguimiento atrasado" />
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {/* Fast access PDF (Drive) and link shortcut - ALWAYS visible to prevent data/access loss */}
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -2144,25 +2349,20 @@ export default function LeadsSection({
                                     setPdfPromptOpen(true);
                                   }
                                 }}
-                                title={card.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización de Google Drive"}
-                                className={`px-2 py-0.5 border rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold cursor-pointer ${
+                                title={card.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización"}
+                                className={`p-1 border rounded-lg transition-all flex items-center justify-center cursor-pointer ${
                                   card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim()
-                                    ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 hover:shadow-3xs active:scale-95'
+                                    ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 active:scale-95'
                                     : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 active:scale-95'
                                 }`}
                               >
-                                <FileText className="w-3 h-3 stroke-[2.5]" />
-                                <span>PDF</span>
+                                <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
                               </button>
-                            </div>
 
-                            <div className="flex items-center gap-1.5">
-                              <div className="scale-90 origin-right">
-                                {renderTemperatureBadge(card.status_proyecto)}
-                              </div>
+                              {/* Assigned Responsible Avatar */}
                               <div 
-                                className={`w-6 h-6 rounded-full ${getAvatarBg(meta.responsable)} text-[10px] font-medium flex items-center justify-center shrink-0`}
-                                title={meta.responsable}
+                                className={`w-6 h-6 rounded-full ${getAvatarBg(meta.responsable)} text-[10px] font-medium flex items-center justify-center shrink-0 shadow-3xs border border-white`}
+                                title={`Responsable: ${meta.responsable}`}
                               >
                                 {getInitials(meta.responsable)}
                               </div>
@@ -2181,342 +2381,782 @@ export default function LeadsSection({
     );
   };
 
-  // ==========================================
-  // ACTIVE DRAWER DETAIL SYSTEM (V2.5)
-  // ==========================================
   const renderDrawerLateralPanel = () => {
     if (!activeDrawerRecordId) return null;
     const cardId = activeDrawerRecordId;
-    const card = records.find(r => r.id === cardId);
-    const meta = kanbanMeta[cardId];
-    if (!card || !meta) return null;
+    
+    // Use draftRecord and draftMeta instead of the parent ones!
+    if (!draftRecord || !draftMeta) return null;
 
-    const completed = meta.subtasks.filter(s => s.completed).length;
-    const progress = meta.subtasks.length > 0 ? (completed / meta.subtasks.length) * 100 : 0;
+    const subtasks = Array.isArray(draftMeta?.subtasks) ? draftMeta.subtasks : [];
+    const completed = subtasks.filter(s => s.completed).length;
+    const progress = subtasks.length > 0 ? (completed / subtasks.length) * 100 : 0;
+
+    // Standard B2B followup contact method options
+    const contactMethods = [
+      'Llamada Telefónica',
+      'Correo Electrónico',
+      'Reunión Presencial',
+      'Reunión Virtual',
+      'WhatsApp',
+      'Mensaje de Texto'
+    ];
+
+    // Reverse followups list to show newest to oldest with safe fallback
+    const reversedFollowups = Array.isArray(draftRecord?.acciones_seguimiento) 
+      ? [...draftRecord.acciones_seguimiento].reverse() 
+      : [];
+
+    // Stagnation threshold limit
+    const stagLimit = draftMeta.stagnation_days_limit || 5;
+
+    // Handle saving all accumulated changes at once!
+    const handleSaveConsolidatedChanges = () => {
+      // 1. Update parent kanbanMeta state
+      const updatedMeta = {
+        ...kanbanMeta,
+        [draftRecord.id]: {
+          ...draftMeta,
+          checklist_tasks: JSON.stringify(subtasks),
+          responsable: draftMeta.responsable,
+          tags: draftMeta.tags.join(','),
+          fecha_cambio_etapa: draftMeta.dateEnteredStage,
+          stagnation_days_limit: draftMeta.stagnation_days_limit
+        }
+      };
+      setKanbanMeta(updatedMeta);
+      localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(updatedMeta));
+
+      // 2. Map metadata fields directly on draftRecord before saving to DB
+      const selectedUser = dbUsers.find(u => u.nombre === draftMeta.responsable);
+      const assignedId = selectedUser ? selectedUser.id : null;
+
+      const packedRecord: CRMRecord = {
+        ...draftRecord,
+        etapa: draftMeta.stage,
+        fecha_cambio_etapa: draftMeta.dateEnteredStage,
+        stagnation_days_limit: draftMeta.stagnation_days_limit,
+        checklist_tasks: JSON.stringify(subtasks),
+        __tareas: subtasks,
+        responsable: draftMeta.responsable,
+        contacto_asignado_id: assignedId,
+        tags: draftMeta.tags.join(',')
+      };
+
+      onUpdateRecord(packedRecord);
+      onShowAudit('MODIFICACIÓN', `Cambios consolidados y guardados para la licitación ${draftRecord.informacion_general_folio}.`);
+      setActiveDrawerRecordId(null);
+    };
+
+    // Handle progress advance logs addition (Guardar Avance)
+    const handleAddAdvanceLog = () => {
+      if (!newFollowupNotes || !newFollowupNotes.trim()) {
+        alert("Escriba notas para guardar el avance de seguimiento.");
+        return;
+      }
+      const newEntry: FollowupEntry = {
+        id: `f_add_${Math.random().toString(36).substring(2, 9)}`,
+        fecha: getMexicoCityDateString(),
+        tipo: newFollowupMethod,
+        creador: activeSessionUserName || 'Geovanni Andrade',
+        notas: newFollowupNotes.trim()
+      };
+      setDraftRecord({
+        ...draftRecord,
+        acciones_seguimiento: [...(draftRecord.acciones_seguimiento || []), newEntry]
+      });
+      setNewFollowupNotes('');
+      // User requested to register current date on action
+      onShowAudit('CONEXIÓN HOJA', `Se agregó nota de seguimiento interactiva para el folio ${draftRecord.informacion_general_folio}.`);
+    };
 
     return createPortal(
       <div className="fixed inset-0 z-50 overflow-hidden text-slate-800">
         {/* SEMITRANSPARENT OVERLAY CLOSING */}
         <div 
           className="absolute inset-0 bg-[#071322]/45 backdrop-blur-xs transition-opacity animate-fade-in"
-          onClick={() => setActiveDrawerRecordId(null)}
+          onClick={() => {
+            setActiveDrawerRecordId(null);
+          }}
         />
 
-        <div className="absolute inset-y-0 right-0 w-[450px] bg-white shadow-2xl flex flex-col border-l border-slate-200 animate-slide-in select-text">
+        <div className="absolute inset-y-0 right-0 max-w-4xl w-full bg-white shadow-2xl flex flex-col border-l border-slate-200 animate-slide-in select-text">
           {/* DRAWER HEADER */}
-          <header className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-left">
+          <header className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-left">
             <div className="space-y-0.5">
-              <span className="text-[10px] uppercase font-font font-mono text-slate-400 font-bold">Consola Lead Detail</span>
+              <span className="text-[10px] uppercase font-mono text-slate-400 font-bold tracking-wider">Consola de Licitación comercial B2B</span>
               <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-blue-600" />
-                Licitación {card.informacion_general_folio || 'S/F'}
+                Licitación {draftRecord.informacion_general_folio || 'S/F'}
               </h3>
             </div>
             
             <button 
-              onClick={() => setActiveDrawerRecordId(null)}
-              className="p-1 px-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition-all"
+              onClick={() => {
+                setActiveDrawerRecordId(null);
+              }}
+              className="p-1 px-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition-all cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </header>
 
           {/* DRAWER SCROLL CONTENT CONTAINER */}
-          <div className="flex-1 overflow-y-auto p-5 text-left space-y-5">
-            {/* 1. Cliente & Proyecto title editable summary */}
-            <div className="space-y-2">
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
-                <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Nombre de Proyecto</label>
-                <input
-                  type="text"
-                  value={card.informacion_general_proyecto || ''}
-                  onChange={(e) => {
-                    onUpdateRecord({ ...card, informacion_general_proyecto: e.target.value });
-                  }}
-                  disabled={role === 'Solo Lectura'}
-                  className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 py-1 font-bold text-xs outline-none text-slate-800 transition-all"
-                  placeholder="e.g. Medición de Flujo"
-                />
-
-                <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono mt-2">Cliente Legal</label>
-                <input
-                  type="text"
-                  value={card.informacion_general_cliente || ''}
-                  onChange={(e) => {
-                    onUpdateRecord({ ...card, informacion_general_cliente: e.target.value });
-                  }}
-                  disabled={role === 'Solo Lectura'}
-                  className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 py-1 font-semibold text-xs outline-none text-slate-700 transition-all font-sans"
-                  placeholder="e.g. Grupo Bimbo"
-                />
-              </div>
-            </div>
-
-            {/* 2. Pipeline Controls status re-assigners */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* Select Stage */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400 font-mono">Etapa del Pipeline</span>
-                <select
-                  value={meta.stage}
-                  onChange={(e) => {
-                    const st = e.target.value as any;
-                    handleCardStageChange(card.id, st);
-                  }}
-                  disabled={role === 'Solo Lectura'}
-                  className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                >
-                  {kanbanColumns.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Select Responsable */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400 font-mono">Miembro Asignado</span>
-                <select
-                  value={meta.responsable}
-                  onChange={(e) => {
-                    const updatedMeta = { ...kanbanMeta };
-                    updatedMeta[card.id] = { ...updatedMeta[card.id], responsable: e.target.value };
-                    setKanbanMeta(updatedMeta);
-                    onShowAudit('MODIFICACIÓN', `Licitación comercial ${card.informacion_general_folio} reasignada a responsable [${e.target.value}].`);
-                  }}
-                  disabled={role === 'Solo Lectura'}
-                  className="bg-slate-50 border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                >
-                  {RESPONSIBLES.map(r => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* 3. Costs parameters */}
-            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
-              <h4 className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider font-mono">Métricas Económicas del Expediente</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Suministros (HW)</label>
-                  <input
-                    type="number"
-                    value={card.total_hardware_cotizacion !== null && card.total_hardware_cotizacion !== undefined ? card.total_hardware_cotizacion : ''}
-                    onChange={(e) => {
-                      const hw = e.target.value === '' ? null : Number(e.target.value);
-                      const serv = card.total_servicios_cotizacion;
-                      const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
-                      const iva = sub === null ? null : sub * 0.16;
-                      const tot = sub === null ? null : sub + (iva !== null ? iva : 0);
-                      onUpdateRecord({
-                        ...card,
-                        total_hardware_cotizacion: hw,
-                        total_subtotal_cotizacion: sub,
-                        total_iva_cotizacion: iva,
-                        total_general_cotizacion: tot
-                      });
-                    }}
-                    disabled={role === 'Solo Lectura'}
-                    className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[8px] uppercase tracking-wider font-bold text-slate-400 font-mono">Coste Integ (Servicio)</label>
-                  <input
-                    type="number"
-                    value={card.total_servicios_cotizacion !== null && card.total_servicios_cotizacion !== undefined ? card.total_servicios_cotizacion : ''}
-                    onChange={(e) => {
-                      const serv = e.target.value === '' ? null : Number(e.target.value);
-                      const hw = card.total_hardware_cotizacion;
-                      const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
-                      const iva = sub === null ? null : sub * 0.16;
-                      const tot = sub === null ? null : sub + (iva !== null ? iva : 0);
-                      onUpdateRecord({
-                        ...card,
-                        total_servicios_cotizacion: serv,
-                        total_subtotal_cotizacion: sub,
-                        total_iva_cotizacion: iva,
-                        total_general_cotizacion: tot
-                      });
-                    }}
-                    disabled={role === 'Solo Lectura'}
-                    className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              {/* Read-Only calculations display */}
-              <div className="pt-2.5 border-t border-slate-200 flex justify-between text-xs font-bold">
-                <span className="text-slate-500">Monto Neto Acumulado (SAT):</span>
-                <span className="text-blue-700 font-data-mono shrink-0">
-                  ${(card.total_general_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} {card.informacion_general_moneda}
-                </span>
-              </div>
-            </div>
-
-            {/* 4. Checklist of subtasks */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-slate-800 tracking-tight">Tareas de la Etapa actual</h4>
-                <span className="text-[10px] bg-slate-100 font-bold px-2 py-0.5 rounded-full border border-slate-250 text-slate-600">
-                  {completed}/{meta.subtasks.length} completadas
-                </span>
-              </div>
-
-              {/* Progress bar */}
-              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                <div 
-                  className="h-full bg-emerald-500 rounded-full transition-all duration-300" 
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-
-              {/* Checklist list */}
-              <div className="space-y-2 max-h-48 overflow-y-auto pt-1 pr-1">
-                {meta.subtasks.map(sub => (
-                  <label 
-                    key={sub.id} 
-                    className="flex items-start gap-2.5 p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors border border-slate-200"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={sub.completed}
-                      onChange={() => handleToggleSubtask(card.id, sub.id)}
-                      disabled={role === 'Solo Lectura'}
-                      className="mt-0.5 w-4.5 h-4.5 rounded border-slate-250 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <span className={`text-xs ${sub.completed ? 'line-through text-slate-400 font-medium' : 'text-slate-700 font-bold'}`}>
-                      {sub.text}
-                    </span>
-                  </label>
-                ))}
-              </div>
-
-              {/* Add checklist item */}
-              {role !== 'Solo Lectura' && (
-                <form 
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const form = e.currentTarget;
-                    const input = form.elements.namedItem('subtaskText') as HTMLInputElement;
-                    handleAddSubtask(card.id, input.value);
-                    form.reset();
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="text"
-                    name="subtaskText"
-                    placeholder="Agregar un nuevo requerimiento..."
-                    className="flex-1 bg-white border border-slate-200 py-1.5 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                  <button 
-                    type="submit"
-                    className="px-3.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition"
-                  >
-                    Agregar
-                  </button>
-                </form>
-              )}
-            </div>
-
-            {/* 5. Custom tags */}
-            <div className="space-y-2">
-              <h4 className="text-xs font-bold text-slate-800">Chips y Categorías</h4>
-              <div className="flex flex-wrap gap-1.5">
-                {meta.tags.map((tg, idx) => (
-                  <span 
-                    key={idx} 
-                    className="bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1"
-                  >
-                    {tg}
-                    {role !== 'Solo Lectura' && (
-                      <button 
-                        onClick={() => {
-                          const updatedMeta = { ...kanbanMeta };
-                          updatedMeta[card.id].tags = updatedMeta[card.id].tags.filter(t => t !== tg);
-                          setKanbanMeta(updatedMeta);
-                        }}
-                        className="text-blue-500 hover:text-red-500 text-[10px]"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </span>
-                ))}
+          <div className="flex-1 overflow-y-auto p-6 text-left">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              
+              {/* COLUMNA IZQUIERDA (65%) */}
+              <div className="lg:col-span-8 space-y-6">
                 
-                {role !== 'Solo Lectura' && (
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const form = e.currentTarget;
-                      const input = form.elements.namedItem('tagText') as HTMLInputElement;
-                      const val = input.value.trim().toUpperCase();
-                      if (val && !meta.tags.includes(val)) {
-                        const updatedMeta = { ...kanbanMeta };
-                        updatedMeta[card.id].tags = [...updatedMeta[card.id].tags, val];
-                        setKanbanMeta(updatedMeta);
-                      }
-                      form.reset();
-                    }}
-                    className="inline"
-                  >
+                {/* 1. Cliente & Proyecto title editable summary */}
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-450 tracking-wider font-mono">Información de Identidad</h4>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-500 font-mono mb-1">Nombre del Proyecto</label>
+                      <input
+                        type="text"
+                        value={draftRecord.informacion_general_proyecto || ''}
+                        onChange={(e) => {
+                          setDraftRecord({ ...draftRecord, informacion_general_proyecto: e.target.value });
+                        }}
+                        disabled={role === 'Solo Lectura'}
+                        className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+                        placeholder="e.g. Medición de Flujo"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-500 font-mono mb-1">Cliente Legal</label>
+                      <input
+                        type="text"
+                        value={draftRecord.informacion_general_cliente || ''}
+                        onChange={(e) => {
+                          setDraftRecord({ ...draftRecord, informacion_general_cliente: e.target.value });
+                        }}
+                        disabled={role === 'Solo Lectura'}
+                        className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+                        placeholder="e.g. Grupo Bimbo"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Interactive Checklist */}
+                <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold uppercase text-slate-500 tracking-wider font-mono">Tareas de la Etapa Actual</h4>
+                    <span className="text-[10px] bg-slate-100 font-bold px-2.5 py-0.5 rounded-full border border-slate-250 text-slate-600">
+                      {completed}/{subtasks.length} completadas
+                    </span>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                    <div 
+                      className="h-full bg-emerald-500 rounded-full transition-all duration-300" 
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+
+                  {/* Checklist list */}
+                  <div className="space-y-2 max-h-48 overflow-y-auto pt-1 pr-1">
+                    {subtasks.length === 0 ? (
+                      <p className="text-[11px] text-slate-400 italic">No hay tareas creadas para esta etapa.</p>
+                    ) : (
+                      subtasks.map(sub => (
+                        <div 
+                          key={sub.id} 
+                          className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors border border-slate-200 gap-2"
+                        >
+                          <label className="flex items-start gap-2.5 flex-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={sub.completed}
+                              onChange={() => {
+                                setDraftMeta({
+                                  ...draftMeta,
+                                  subtasks: subtasks.map(s => s.id === sub.id ? { ...s, completed: !s.completed } : s)
+                                });
+                              }}
+                              disabled={role === 'Solo Lectura'}
+                              className="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                            />
+                            <span className={`text-xs ${sub.completed ? 'line-through text-slate-400 font-medium' : 'text-slate-700 font-bold'}`}>
+                              {sub.text}
+                            </span>
+                          </label>
+                          {role !== 'Solo Lectura' && (
+                            <button
+                              onClick={() => {
+                                setDraftMeta({
+                                  ...draftMeta,
+                                  subtasks: subtasks.filter(s => s.id !== sub.id)
+                                });
+                              }}
+                              className="text-slate-400 hover:text-red-500 p-1 rounded transition-colors"
+                              title="Eliminar tarea"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Add checklist item */}
+                  {role !== 'Solo Lectura' && (
+                    <form 
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const form = e.currentTarget;
+                        const input = form.elements.namedItem('subtaskText') as HTMLInputElement;
+                        const text = input.value.trim();
+                        if (text) {
+                          setDraftMeta({
+                            ...draftMeta,
+                            subtasks: [
+                              ...subtasks,
+                              {
+                                id: `sub_${Math.random().toString(36).substring(2, 9)}`,
+                                text,
+                                completed: false
+                              }
+                            ]
+                          });
+                          form.reset();
+                        }
+                      }}
+                      className="flex gap-2"
+                    >
+                      <input
+                        type="text"
+                        name="subtaskText"
+                        placeholder="Agregar un nuevo requerimiento..."
+                        className="flex-1 bg-white border border-slate-200 py-1.5 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <button 
+                        type="submit"
+                        className="px-3.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition cursor-pointer"
+                      >
+                        Agregar
+                      </button>
+                    </form>
+                  )}
+                </div>
+
+                {/* 3. Progress / Notes Log input */}
+                <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-3">
+                  <h4 className="text-xs font-extrabold uppercase text-slate-500 tracking-wider font-mono">Nuevo Log / Reporte de Avance</h4>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-400 font-mono">Método de Contacto</label>
+                      <select
+                        value={newFollowupMethod}
+                        onChange={(e) => setNewFollowupMethod(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        {contactMethods.map(method => (
+                          <option key={method} value={method}>{method}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-400 font-mono">Notas del Seguimiento</label>
+                    <textarea
+                      value={newFollowupNotes}
+                      onChange={(e) => setNewFollowupNotes(e.target.value)}
+                      rows={3}
+                      className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                      placeholder="Describa el avance comercial obtenido con el cliente..."
+                    />
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddAdvanceLog}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-all shadow-3xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Guardar Avance</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Timeline Type history logs */}
+                <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-4">
+                  <h4 className="text-xs font-extrabold uppercase text-slate-500 tracking-wider font-mono">Historial de Seguimiento B2B (Recientes Primero)</h4>
+                  
+                  {reversedFollowups.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No hay logs registrados en el historial.</p>
+                  ) : (
+                    <div className="relative pl-4 border-l border-slate-200 space-y-4">
+                      {reversedFollowups.map((f, fIdx) => (
+                        <div key={f.id || fIdx} className="relative text-left group">
+                          <span className="absolute -left-[20.5px] top-1 w-2.5 h-2.5 rounded-full bg-blue-600 border border-white" />
+                          
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] text-slate-400 font-bold font-mono">
+                              {f.fecha}
+                            </div>
+                            
+                            {/* Edit & Delete Controls */}
+                            {role !== 'Solo Lectura' && editingFollowupId !== f.id && (
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={() => {
+                                    setEditingFollowupId(f.id);
+                                    setEditingFollowupNotes(f.notas);
+                                  }}
+                                  className="p-1 text-slate-450 hover:text-blue-600 rounded transition cursor-pointer"
+                                  title="Editar nota"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const updated = (draftRecord.acciones_seguimiento || []).filter(item => item.id !== f.id);
+                                    setDraftRecord({ ...draftRecord, acciones_seguimiento: updated });
+                                  }}
+                                  className="p-1 text-slate-450 hover:text-red-600 rounded transition cursor-pointer"
+                                  title="Eliminar nota"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="text-[11px] font-black text-slate-700">
+                            {f.tipo} - <span className="text-[9px] text-slate-450 uppercase">{f.creador}</span>
+                          </div>
+
+                          {editingFollowupId === f.id ? (
+                            <div className="mt-1 bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
+                              <textarea
+                                value={editingFollowupNotes}
+                                onChange={(e) => setEditingFollowupNotes(e.target.value)}
+                                className="w-full bg-white border border-slate-200 py-1.5 px-2.5 rounded-md text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                                rows={2}
+                              />
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  onClick={() => {
+                                    setEditingFollowupId(null);
+                                  }}
+                                  className="px-2 py-1 text-[10px] border border-slate-200 text-slate-600 rounded font-bold hover:bg-slate-100 cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (!editingFollowupNotes.trim()) return;
+                                    const updated = (draftRecord.acciones_seguimiento || []).map(item => {
+                                      if (item.id === f.id) {
+                                        return { ...item, notas: editingFollowupNotes.trim() };
+                                      }
+                                      return item;
+                                    });
+                                    setDraftRecord({ ...draftRecord, acciones_seguimiento: updated });
+                                    setEditingFollowupId(null);
+                                  }}
+                                  className="px-2 py-1 text-[10px] bg-blue-600 text-white rounded font-bold hover:bg-blue-700 cursor-pointer"
+                                >
+                                  Guardar
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[11.5px] text-slate-600 mt-1 leading-relaxed bg-slate-50/50 p-2 rounded-lg border border-slate-100">
+                              {f.notas}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* COLUMNA DERECHA (35%) */}
+              <div className="lg:col-span-4 space-y-6">
+                
+                {/* 1. MÓDULO FINANCIERO CON VALORES DE SUBTOTAL, HW, SERVICIOS, IVA Y TOTAL */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-450 tracking-wider font-mono">Valores de Cotización</h4>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-450 font-mono mb-1">Coste Suministros (HW)</label>
+                      <div className="relative flex items-center">
+                        <span className="absolute left-3 text-xs font-bold text-slate-400">$</span>
+                        <input
+                          type="number"
+                          value={draftRecord.total_hardware_cotizacion !== null && draftRecord.total_hardware_cotizacion !== undefined ? draftRecord.total_hardware_cotizacion : ''}
+                          onChange={(e) => {
+                            const hw = e.target.value === '' ? null : Number(e.target.value);
+                            const serv = draftRecord.total_servicios_cotizacion;
+                            const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
+                            const iva = 0;
+                            const tot = sub;
+                            setDraftRecord({
+                              ...draftRecord,
+                              total_hardware_cotizacion: hw,
+                              total_subtotal_cotizacion: sub,
+                              total_iva_cotizacion: iva,
+                              total_general_cotizacion: tot
+                            });
+                          }}
+                          disabled={role === 'Solo Lectura'}
+                          className="w-full bg-white border border-slate-200 py-1.5 pl-7 pr-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-450 font-mono mb-1">Coste Integ (Servicios)</label>
+                      <div className="relative flex items-center">
+                        <span className="absolute left-3 text-xs font-bold text-slate-400">$</span>
+                        <input
+                          type="number"
+                          value={draftRecord.total_servicios_cotizacion !== null && draftRecord.total_servicios_cotizacion !== undefined ? draftRecord.total_servicios_cotizacion : ''}
+                          onChange={(e) => {
+                            const serv = e.target.value === '' ? null : Number(e.target.value);
+                            const hw = draftRecord.total_hardware_cotizacion;
+                            const sub = (hw === null && serv === null) ? null : ((hw !== null ? hw : 0) + (serv !== null ? serv : 0));
+                            const iva = 0;
+                            const tot = sub;
+                            setDraftRecord({
+                              ...draftRecord,
+                              total_servicios_cotizacion: serv,
+                              total_subtotal_cotizacion: sub,
+                              total_iva_cotizacion: iva,
+                              total_general_cotizacion: tot
+                            });
+                          }}
+                          disabled={role === 'Solo Lectura'}
+                          className="w-full bg-white border border-slate-200 py-1.5 pl-7 pr-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="h-px bg-slate-200 my-2"></div>
+
+                  <div className="space-y-1.5 text-xs text-slate-600">
+                    <div className="flex justify-between">
+                      <span className="font-medium">Subtotal Cotización:</span>
+                      <span className="font-bold text-slate-800">
+                        ${(draftRecord.total_subtotal_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {draftRecord.informacion_general_moneda}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">IVA Trasladado (16%):</span>
+                      <span className="font-semibold text-slate-700">
+                        ${(draftRecord.total_iva_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {draftRecord.informacion_general_moneda}
+                      </span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-slate-200 font-extrabold text-[13px] text-blue-800">
+                      <span>Total General (SAT):</span>
+                      <span className="font-mono">
+                        ${(draftRecord.total_general_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {draftRecord.informacion_general_moneda}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. LOCALIZACIÓN & PLANTA INDUSTRIAL */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-450 tracking-wider font-mono">Ubicación de Operación</h4>
+                  
+                  <div>
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-455 font-mono mb-1">Planta Industrial</label>
                     <input
                       type="text"
-                      name="tagText"
-                      placeholder="+ Tag..."
-                      className="border border-slate-200 px-2.5 py-0.5 rounded-full text-[9px] outline-none focus:border-blue-500 w-20 text-center font-bold"
+                      value={draftRecord.informacion_general_planta || ''}
+                      onChange={(e) => {
+                        setDraftRecord({ ...draftRecord, informacion_general_planta: e.target.value });
+                      }}
+                      disabled={role === 'Solo Lectura'}
+                      className="w-full bg-white border border-slate-200 py-1.5 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                      placeholder="Planta Industrial..."
                     />
-                  </form>
-                )}
-              </div>
-            </div>
-
-            {/* 6. Commercial observations */}
-            <div className="space-y-1">
-              <h4 className="text-xs font-bold text-slate-800">Bitácora & Notas</h4>
-              <textarea
-                value={card.notas_comerciales || ''}
-                onChange={(e) => {
-                  onUpdateRecord({ ...card, notas_comerciales: e.target.value });
-                }}
-                disabled={role === 'Solo Lectura'}
-                rows={4}
-                className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="Escriba comentarios y notas de seguimiento..."
-              />
-            </div>
-
-            {/* 7. Timeline Type history logs */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-bold text-slate-800">Historial de Seguimiento B2B</h4>
-              <div className="relative pl-4 border-l border-slate-200 space-y-4">
-                {card.acciones_seguimiento && card.acciones_seguimiento.map((f, fIdx) => (
-                  <div key={f.id || fIdx} className="relative">
-                    <span className="absolute -left-[20.5px] top-1 w-2.5 h-2.5 rounded-full bg-blue-600 border border-white" />
-                    <div className="text-[10px] text-slate-400 font-bold font-mono">
-                      {f.fecha}
-                    </div>
-                    <div className="text-[11px] font-black text-slate-700">
-                      {f.tipo} - <span className="text-[9px] text-slate-450 uppercase">{f.creador}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-600 mt-0.5">
-                      {f.notas}
-                    </p>
                   </div>
-                ))}
+                </div>
+
+                {/* 3. PARÁMETROS DE PROCESO & CONTROL */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-455 tracking-wider font-mono">Parámetros de Proceso</h4>
+
+                  {/* Stage Selector */}
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-450 font-mono">Etapa actual en Pipeline</label>
+                    <select
+                      value={draftMeta.stage}
+                      onChange={(e) => {
+                        const nextStage = e.target.value;
+                        setDraftMeta({
+                          ...draftMeta,
+                          stage: nextStage,
+                          dateEnteredStage: getMexicoCityDateString() // register stage change date as of today
+                        });
+                      }}
+                      disabled={role === 'Solo Lectura'}
+                      className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      {kanbanColumns.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Member Assigned Selector */}
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-455 font-mono">Responsable Asignado</label>
+                    <select
+                      value={draftMeta.responsable || ''}
+                      onChange={(e) => {
+                        setDraftMeta({
+                          ...draftMeta,
+                          responsable: e.target.value || ''
+                        });
+                      }}
+                      disabled={role === 'Solo Lectura'}
+                      className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Sin Asignar</option>
+                      {dbUsers.filter(u => u.estado === 'active').map(u => (
+                        <option key={u.id} value={u.nombre}>{u.nombre}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Stagnation Days Limit customizable threshold */}
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-455 font-mono">Alerta de Estancamiento (Días)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={stagLimit}
+                      onChange={(e) => {
+                        const val = e.target.value === '' ? 5 : Math.max(1, Number(e.target.value));
+                        setDraftMeta({
+                          ...draftMeta,
+                          stagnation_days_limit: val
+                        });
+                      }}
+                      disabled={role === 'Solo Lectura'}
+                      className="w-full bg-white border border-slate-200 py-1.5 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Non-editable temperature status */}
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-455 font-mono">Nivel de Interés (Termo)</label>
+                    <div className="pt-1.5">
+                      {renderTemperatureBadge(draftRecord.status_proyecto)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. CONTACT ASSIGNMENT MODULO */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4 text-left">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-455 tracking-wider font-mono">Contacto del Cliente</h4>
+                  
+                  {/* Select assignment */}
+                  <div className="space-y-1">
+                    <label className="block text-[9px] uppercase tracking-wider font-bold text-slate-455 font-mono">Asignar Contacto Existente</label>
+                    <select
+                      value={draftRecord.contacto_nombre || ''}
+                      onChange={(e) => {
+                        const selectedName = e.target.value;
+                        if (!selectedName) {
+                          setDraftRecord({
+                            ...draftRecord,
+                            contacto_nombre: null,
+                            contacto_puesto: null,
+                            contacto_email: null,
+                            contacto_telefono: null
+                          });
+                        } else {
+                          const found = contacts.find(c => c.nombre === selectedName);
+                          if (found) {
+                            setDraftRecord({
+                              ...draftRecord,
+                              contacto_nombre: found.nombre,
+                              contacto_puesto: found.puesto,
+                              contacto_email: found.email,
+                              contacto_telefono: found.telefono
+                            });
+                          }
+                        }
+                      }}
+                      disabled={role === 'Solo Lectura'}
+                      className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="">-- Sin asignación --</option>
+                      {contacts.map(c => (
+                        <option key={c.id} value={c.nombre}>
+                          {c.nombre} ({c.cliente} - {c.puesto})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Profile Card Display */}
+                  {draftRecord.contacto_nombre ? (
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg space-y-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-[11px]">
+                          {getInitials(draftRecord.contacto_nombre)}
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-800">{draftRecord.contacto_nombre}</div>
+                          <div className="text-[10px] text-slate-400 font-medium">{draftRecord.contacto_puesto || 'Puesto no registrado'}</div>
+                        </div>
+                      </div>
+
+                      <div className="h-px bg-slate-100 my-1"></div>
+
+                      <div className="space-y-1 text-[10.5px] text-slate-600">
+                        <div className="flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-slate-400" />
+                          <span className="truncate">{draftRecord.contacto_email || 'Email no registrado'}</span>
+                        </div>
+                        {draftRecord.contacto_telefono && (
+                          <div className="flex items-center gap-1.5 text-[10.5px]">
+                            <span className="text-slate-400">📞</span>
+                            <span>{draftRecord.contacto_telefono}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {role !== 'Solo Lectura' && (
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraftRecord({
+                                ...draftRecord,
+                                contacto_nombre: null,
+                                contacto_puesto: null,
+                                contacto_email: null,
+                                contacto_telefono: null
+                              });
+                            }}
+                            className="text-[10px] text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Desasignar contacto</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="border border-dashed border-slate-200 p-4 rounded-lg text-center text-slate-400 bg-white">
+                      <span className="text-[11px] font-medium block">Sin contacto asignado</span>
+                      <span className="text-[9px] block mt-0.5">Usa la lista de arriba para asignarle un contacto comercial a este proyecto.</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 5. GESTIÓN DE CHIPS / TAGS */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 text-left">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-455 tracking-wider font-mono">Etiquetas y Categorías</h4>
+                  
+                  <div className="flex flex-wrap gap-1.5">
+                    {draftMeta.tags.map((tg, idx) => (
+                      <span 
+                        key={idx} 
+                        className="bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1"
+                      >
+                        {tg}
+                        {role !== 'Solo Lectura' && (
+                          <button 
+                            onClick={() => {
+                              setDraftMeta({
+                                ...draftMeta,
+                                tags: draftMeta.tags.filter(t => t !== tg)
+                              });
+                            }}
+                            className="text-blue-500 hover:text-red-500 text-[10px] font-bold shrink-0 cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                    
+                    {role !== 'Solo Lectura' && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const form = e.currentTarget;
+                          const input = form.elements.namedItem('tagText') as HTMLInputElement;
+                          const val = input.value.trim().toUpperCase();
+                          if (val && !draftMeta.tags.includes(val)) {
+                            setDraftMeta({
+                              ...draftMeta,
+                              tags: [...draftMeta.tags, val]
+                            });
+                          }
+                          form.reset();
+                        }}
+                        className="inline"
+                      >
+                        <input
+                          type="text"
+                          name="tagText"
+                          placeholder="+ Tag..."
+                          className="border border-slate-200 px-2.5 py-0.5 rounded-full text-[9px] outline-none focus:border-blue-500 w-20 text-center font-bold"
+                        />
+                      </form>
+                    )}
+                  </div>
+                </div>
+
+                {/* 6. OBSERVACIONES / NOTAS COMERCIALES GENERALES */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 text-left">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-455 tracking-wider font-mono">Observaciones Comerciales</h4>
+                  <textarea
+                    value={draftRecord.notas_comerciales || ''}
+                    onChange={(e) => {
+                      setDraftRecord({ ...draftRecord, notas_comerciales: e.target.value });
+                    }}
+                    disabled={role === 'Solo Lectura'}
+                    rows={3}
+                    className="w-full bg-white border border-slate-200 py-2 px-3 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                    placeholder="Comentarios o notas de bitácora comercial..."
+                  />
+                </div>
+
               </div>
+
             </div>
           </div>
 
-          {/* DRAWER FOOTER */}
-          <footer className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+          {/* DRAWER FOOTER WITH ACCUMULATE & SAVE ACTION BUTTONS */}
+          <footer className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3.5">
             <button
-              onClick={() => setActiveDrawerRecordId(null)}
-              className="px-5 py-2 bg-[#0c1827] text-white text-xs font-bold rounded-lg hover:bg-slate-900 transition shadow-3xs"
+              onClick={() => {
+                setActiveDrawerRecordId(null);
+              }}
+              className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-100 transition cursor-pointer"
             >
-              Cerrar Expediente
+              Cancelar
+            </button>
+            <button
+              onClick={handleSaveConsolidatedChanges}
+              disabled={role === 'Solo Lectura'}
+              className="px-5 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 disabled:opacity-40 transition shadow-3xs cursor-pointer flex items-center gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Guardar Cambios</span>
             </button>
           </footer>
         </div>
@@ -2530,23 +3170,75 @@ export default function LeadsSection({
   // ==========================================
   const renderConfirmationCloseModal = () => {
     if (!pendingDrag) return null;
-    const { recordId, targetStage } = pendingDrag;
+    const { recordId, targetStage, type = 'archive' } = pendingDrag;
     const r = records.find(rec => rec.id === recordId);
     if (!r) return null;
+
+    if (type === 'delete') {
+      return createPortal(
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in duration-150">
+          {/* BLUR BACKGROUND OVERLAY */}
+          <div 
+            className="absolute inset-0 transition-opacity cursor-pointer"
+            onClick={() => setPendingDrag(null)}
+          />
+
+          <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-scale-in relative z-10">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-3 bg-red-50 rounded-full text-red-600 border border-red-100 shadow-[inset_0_1px_2px_rgba(239,68,68,0.1)]">
+                <Trash2 className="w-6 h-6 stroke-[2]" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                  ¿Confirmar Eliminación?
+                </h3>
+                <p className="text-xs text-slate-400 font-medium tracking-wide font-sans">OPERACIÓN OPERATIVA IRREVERSIBLE</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-650 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
+              Estás a punto de eliminar definitivamente la licitación <strong className="font-bold text-slate-900">{r.informacion_general_proyecto || 'Sin Nombre'}</strong> de {r.informacion_general_cliente || 'Sin Cliente'} con Folio <strong className="font-bold text-red-600 font-data-mono">{r.informacion_general_folio || 'Sin Folio'}</strong>. 
+              <span className="block mt-2 font-bold text-slate-800">
+                ⚠ Esta acción eliminará permanentemente la información, cotizaciones asociadas y el historial de seguimiento del embudo.
+              </span>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingDrag(null)}
+                className="px-4 py-2 bg-slate-150 hover:bg-slate-200 text-slate-750 font-bold text-xs rounded-lg transition-all border border-slate-250 active:scale-95 cursor-pointer shadow-3xs"
+              >
+                No, Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteActual}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg shadow-2xs hover:shadow-xs transition-all flex items-center gap-1.5 active:scale-95 border-b-2 border-b-red-800 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Sí, Eliminar Registro
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      );
+    }
 
     const reasons = targetStage === 'Cerrado Ganado' 
       ? ['Ganado por precio', 'Ganado por relación', 'Ganado por entrega', 'Ganado por tecnología', 'Otro']
       : ['Perdido por presupuesto', 'Perdido por competencia', 'Perdido sin respuesta', 'Perdido por tiempos', 'Otro'];
 
-    return (
-      <div className="fixed inset-0 z-55 flex items-center justify-center p-4">
+    return createPortal(
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 text-slate-800 animate-in fade-in duration-150">
         {/* BLUR BACKGROUND OVERLAY */}
         <div 
-          className="absolute inset-0 bg-slate-950/50 backdrop-blur-xs transition-opacity animate-fade-in"
+          className="absolute inset-0 transition-opacity cursor-pointer"
           onClick={() => setPendingDrag(null)}
         />
 
-        <div className="relative bg-white border border-slate-2 bg-white w-full max-w-md rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-scale-in text-slate-800">
+        <div className="relative bg-white border border-slate-200 w-full max-w-md rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-scale-in z-10">
           <header className="px-5 py-3.5 bg-slate-50 border-b border-slate-150 text-left">
             <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 uppercase font-sans tracking-wide">
               <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
@@ -2603,7 +3295,8 @@ export default function LeadsSection({
             </button>
           </footer>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   };
 
@@ -2969,17 +3662,19 @@ export default function LeadsSection({
                   {renderHeaderCell('project', 'Descripción Proyecto')}
                   {renderHeaderCell('amount', 'Subtotal Proyecto', 'right')}
                   {renderHeaderCell('stage', 'Etapa', 'center')}
+                  {renderHeaderCell('responsable', 'Responsable', 'center')}
                   {renderHeaderCell('status', 'Estado')}
                   {renderHeaderCell('level', 'Nivel / Termo', 'center')}
-                  {renderHeaderCell('actions_followup', 'Acciones', 'center')}
-                  {renderHeaderCell('oc', 'Ref OC / Trámite', 'center')}
+                  {renderHeaderCell('actions_followup', 'Nueva Acción', 'center')}
+                  {renderHeaderCell('actions_history', 'Historial Acciones', 'center')}
+                  {renderHeaderCell('checklist_progress', 'Checklist Tareas', 'center')}
                   <th className="p-3 px-4 font-bold text-right text-slate-500 w-[8%] min-w-[100px] max-w-[120px]">Opciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-150 text-sm">
                 {paginatedRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="p-8 text-center text-slate-400">
+                    <td colSpan={13} className="p-8 text-center text-slate-400">
                       Ningún registro mapea con los filtros definidos.
                     </td>
                   </tr>
@@ -2999,7 +3694,25 @@ export default function LeadsSection({
                         {r.informacion_general_planta || <span className="text-slate-400 font-normal italic">null</span>}
                       </td>
                       <td className={`p-3 px-4 text-slate-700 font-medium truncate ${getColWidthClass('project')}`} title={r.informacion_general_proyecto || ''}>
-                        {r.informacion_general_proyecto || <span className="text-slate-400 font-normal italic">null</span>}
+                        <div className="font-semibold text-slate-800 leading-tight">
+                          {r.informacion_general_proyecto || <span className="text-slate-400 font-normal italic">null</span>}
+                        </div>
+                        {(() => {
+                          const meta = kanbanMeta[r.id];
+                          const tags = (meta && meta.tags) 
+                            ? (Array.isArray(meta.tags) ? meta.tags : String(meta.tags).split(',').filter(Boolean))
+                            : (r.tags ? String(r.tags).split(',').filter(Boolean) : []);
+                          if (tags.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-1 mt-1.5 max-w-[150px]">
+                              {tags.map((tag: string) => (
+                                <span key={tag} className="inline-block px-1 py-0.5 bg-slate-50 text-slate-500 text-[8px] font-extrabold uppercase font-mono rounded border border-slate-200 truncate" title={tag}>
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className={`p-3 px-4 text-right font-bold text-slate-900 font-data-mono truncate ${getColWidthClass('amount')}`}>
                         {(r.total_subtotal_cotizacion || 0).toLocaleString('en-US', {
@@ -3009,16 +3722,24 @@ export default function LeadsSection({
                         })}
                       </td>
                       <td className={`p-3 px-4 text-center ${getColWidthClass('stage')}`}>
-                        {(() => {
-                          const s = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
-                          const styles = getStageStyles(s);
-                          return (
-                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border ${styles.bg}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`}></span>
-                              {s}
-                            </span>
-                          );
-                        })()}
+                        <EtapaCell
+                          record={r}
+                          role={role}
+                          kanbanColumns={kanbanColumns}
+                          kanbanMeta={kanbanMeta}
+                          setKanbanMeta={setKanbanMeta}
+                          onUpdateRecord={onUpdateRecord}
+                        />
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('responsable')}`}>
+                        <ResponsableCell
+                          record={r}
+                          role={role}
+                          dbUsers={dbUsers || []}
+                          kanbanMeta={kanbanMeta}
+                          setKanbanMeta={setKanbanMeta}
+                          onUpdate={onUpdateRecord}
+                        />
                       </td>
                       <td className={`p-3 px-4 text-center ${getColWidthClass('status')}`}>
                         <EstadoCell
@@ -3036,17 +3757,23 @@ export default function LeadsSection({
                         />
                       </td>
                       <td className={`p-3 px-4 text-center ${getColWidthClass('actions_followup')}`}>
-                        <AccionesSeguimientoCell
+                        <RegistrarAccionCell
                           record={r}
                           role={role}
                           onUpdate={onUpdateRecord}
                         />
                       </td>
-                      <td className={`p-3 px-4 text-center ${getColWidthClass('oc')}`}>
-                        <TrazabilidadCell
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('actions_history')}`}>
+                        <HistorialAccionesCell
                           record={r}
                           role={role}
                           onUpdate={onUpdateRecord}
+                        />
+                      </td>
+                      <td className={`p-3 px-4 text-center ${getColWidthClass('checklist_progress')}`}>
+                        <SubtasksProgressCell
+                          record={r}
+                          kanbanMeta={kanbanMeta}
                         />
                       </td>
                       <td className="p-3 px-4 text-right w-[8%] min-w-[100px] max-w-[120px]">
@@ -3134,10 +3861,11 @@ export default function LeadsSection({
       ) : (
         <>
           {renderKanbanView()}
-          {renderDrawerLateralPanel()}
-          {renderConfirmationCloseModal()}
         </>
       )}
+
+      {renderDrawerLateralPanel()}
+      {renderConfirmationCloseModal()}
 
       {/* MODAL: DETAIL WINDOW */}
       {isDetailOpen && selectedRecord && createPortal(
@@ -3532,53 +4260,6 @@ export default function LeadsSection({
         document.getElementById('root')!
       )}
 
-      {/* MODAL: EXPLICIT 3D REMOVAL ALERT CONFIRMATION */}
-      {deleteConfirmOpen && recordToDelete && createPortal(
-        <div className="fixed inset-0 bg-[#0b1c30]/50 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-150">
-          <div className="bg-white border-t border-l border-slate-100 border-r-2 border-b-6 border-b-red-500 border-r-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-in zoom-in-95 duration-150 relative z-[9999]">
-            <div className="flex items-center gap-3 text-red-600">
-              <div className="p-3 bg-red-50 rounded-full text-red-600 border border-red-100 shadow-[inset_0_1px_2px_rgba(239,68,68,0.1)]">
-                <Trash2 className="w-6 h-6 stroke-[2]" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900 tracking-tight">
-                  ¿Confirmar Eliminación?
-                </h3>
-                <p className="text-xs text-slate-400 font-medium tracking-wide font-sans">OPERACIÓN OPERATIVA IRREVERSIBLE</p>
-              </div>
-            </div>
-
-            <div className="text-xs text-slate-650 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
-              Estás a punto de eliminar definitivamente el expediente comercial con Folio <strong className="font-bold text-red-600 font-data-mono">{recordToDelete.folio}</strong> de la base de datos de Supabase / Google Sheets. 
-              <span className="block mt-2 font-bold text-slate-800">
-                ⚠ Esta acción eliminará permanentemente la información, cotizaciones asociadas y el historial de trazabilidad del embudo.
-              </span>
-            </div>
-
-            <div className="flex gap-2 justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteConfirmOpen(false);
-                  setRecordToDelete(null);
-                }}
-                className="px-4 py-2 bg-slate-150 hover:bg-slate-200 text-slate-750 font-bold text-xs rounded-lg transition-all border border-slate-250 active:scale-95 cursor-pointer shadow-3xs"
-              >
-                No, Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDeleteActual}
-                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg shadow-2xs hover:shadow-xs transition-all flex items-center gap-1.5 active:scale-95 border-b-2 border-b-red-800 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Sí, Eliminar Registro
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('root')!
-      )}
 
       {/* MODAL: PDF MISSING WARNING & HELP OPTIONS */}
       {pdfPromptOpen && pdfPromptRecord && createPortal(
@@ -4555,6 +5236,478 @@ function NivelTermoCell({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EtapaCell({
+  record,
+  role,
+  kanbanColumns,
+  kanbanMeta,
+  setKanbanMeta,
+  onUpdateRecord
+}: {
+  record: CRMRecord;
+  role: string;
+  kanbanColumns: string[];
+  kanbanMeta: Record<string, any>;
+  setKanbanMeta: React.Dispatch<React.SetStateAction<Record<string, any>>>;
+  onUpdateRecord: (rec: CRMRecord) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const currentStage = kanbanMeta[record.id]?.stage || record.etapa || 'Nuevo';
+  const styles = getStageStyles(currentStage);
+
+  const handleSelect = (newStage: string) => {
+    if (role === 'Solo Lectura') return;
+
+    const currentMeta = kanbanMeta[record.id] || {
+      stage: record.etapa || 'Nuevo',
+      dateEnteredStage: record.fecha_cambio_etapa || record.fecha_registro || getMexicoCityDateString(),
+      responsable: record.responsable || '',
+      subtasks: Array.isArray(record.__tareas) ? record.__tareas : [],
+      tags: [],
+      stagnation_days_limit: 5
+    };
+
+    const todayStr = getMexicoCityDateString();
+
+    const updatedMeta = {
+      ...kanbanMeta,
+      [record.id]: {
+        ...currentMeta,
+        stage: newStage,
+        dateEnteredStage: todayStr
+      }
+    };
+
+    setKanbanMeta(updatedMeta);
+    localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(updatedMeta));
+
+    onUpdateRecord({
+      ...record,
+      etapa: newStage,
+      fecha_cambio_etapa: todayStr
+    });
+
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative inline-block text-left" ref={dropdownRef}>
+      <button
+        type="button"
+        disabled={role === 'Solo Lectura'}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={`focus:outline-none transition-all active:scale-95 ${
+          role === 'Solo Lectura' ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:opacity-90'
+        }`}
+        title="Cambiar Etapa Kanban"
+      >
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border transition-all ${styles.bg}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`}></span>
+          {currentStage} <span className="ml-0.5 text-[8px] opacity-70">▼</span>
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-1/2 -translate-x-1/2 mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-xl z-50 py-1 divide-y divide-slate-100 animate-in fade-in duration-100">
+          <div className="px-1 py-1 text-[8px] uppercase tracking-wider font-bold text-slate-400 text-center select-none font-sans">
+            Etapas del Kanban
+          </div>
+          <div className="p-1 space-y-1 max-h-60 overflow-y-auto">
+            {kanbanColumns.map((col) => (
+              <button
+                key={col}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelect(col);
+                }}
+                className={`w-full text-left px-2 py-1.5 text-xs font-semibold rounded hover:bg-slate-50 transition-colors flex items-center justify-between ${
+                  currentStage === col ? 'bg-slate-50/50 font-bold text-blue-700' : 'text-slate-700'
+                }`}
+              >
+                <span>{col}</span>
+                {currentStage === col && <span className="text-[9px] text-blue-600">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResponsableCell({
+  record,
+  role,
+  dbUsers = [],
+  kanbanMeta,
+  setKanbanMeta,
+  onUpdate
+}: {
+  record: CRMRecord;
+  role: string;
+  dbUsers: UserAccount[];
+  kanbanMeta: Record<string, any>;
+  setKanbanMeta: React.Dispatch<React.SetStateAction<Record<string, any>>>;
+  onUpdate: (rec: CRMRecord) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const currentMeta = kanbanMeta[record.id];
+  const matchedUser = record.contacto_asignado_id ? dbUsers.find(u => u.id === record.contacto_asignado_id) : null;
+  const currentResponsable = matchedUser ? matchedUser.nombre : (currentMeta?.responsable || record.responsable || null);
+
+  const handleSelect = (name: string | null) => {
+    if (role === 'Solo Lectura') return;
+
+    const selectedUser = dbUsers.find(u => u.nombre === name);
+    const assignedId = selectedUser ? selectedUser.id : null;
+
+    const updatedMeta = {
+      ...kanbanMeta,
+      [record.id]: {
+        ...(currentMeta || {
+          stage: record.etapa || 'Nuevo',
+          dateEnteredStage: record.fecha_cambio_etapa || record.fecha_registro || getMexicoCityDateString(),
+          subtasks: Array.isArray(record.__tareas) ? record.__tareas : [],
+          tags: [],
+          stagnation_days_limit: 5
+        }),
+        responsable: name,
+        contacto_asignado_id: assignedId
+      }
+    };
+
+    setKanbanMeta(updatedMeta);
+    localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(updatedMeta));
+
+    onUpdate({
+      ...record,
+      responsable: name,
+      contacto_asignado_id: assignedId
+    });
+
+    setIsOpen(false);
+  };
+
+  const initials = currentResponsable
+    ? currentResponsable.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()
+    : 'N/A';
+
+  const activeUsers = dbUsers.filter(u => u.estado === 'active');
+
+  return (
+    <div className="relative inline-block text-left" ref={dropdownRef}>
+      <button
+        type="button"
+        disabled={role === 'Solo Lectura'}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={`flex items-center gap-1 focus:outline-none transition-all active:scale-95 ${
+          role === 'Solo Lectura' ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:opacity-90'
+        }`}
+        title="Asignar Responsable"
+      >
+        {currentResponsable ? (
+          <div className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 py-0.5 px-1.5 rounded border border-slate-200">
+            <div className="w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[8px] font-black font-mono shadow-3xs">
+              {initials}
+            </div>
+            <span className="text-[10px] font-bold text-slate-700 truncate max-w-[70px]">
+              {currentResponsable}
+            </span>
+            <span className="text-[7px] text-slate-400">▼</span>
+          </div>
+        ) : (
+          <span className="text-[10px] text-slate-400 italic hover:text-slate-600 bg-slate-50 border border-dashed border-slate-300 py-0.5 px-1.5 rounded">
+            Sin Asignar <span className="text-[7px]">▼</span>
+          </span>
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-1/2 -translate-x-1/2 mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-xl z-50 py-1 divide-y divide-slate-100 animate-in fade-in duration-100">
+          <div className="px-1 py-1 text-[8px] uppercase tracking-wider font-bold text-slate-400 text-center select-none font-sans">
+            Responsables Comerciales
+          </div>
+          <div className="p-1 space-y-1 max-h-60 overflow-y-auto">
+            {activeUsers.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelect(u.nombre);
+                }}
+                className={`w-full text-left px-2 py-1 text-xs font-semibold rounded hover:bg-slate-50 transition-colors flex items-center justify-between ${
+                  currentResponsable === u.nombre ? 'bg-slate-50/50 font-bold text-blue-700' : 'text-slate-700'
+                }`}
+              >
+                <span>{u.nombre}</span>
+                {currentResponsable === u.nombre && <span className="text-[9px] text-blue-600">✓</span>}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleSelect(null);
+              }}
+              className={`w-full text-left px-2 py-1 text-xs font-semibold rounded hover:bg-red-50 text-red-600 transition-colors flex items-center justify-between`}
+            >
+              <span className="italic">Desasignar</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RegistrarAccionCell({
+  record,
+  role,
+  onUpdate
+}: {
+  record: CRMRecord;
+  role: string;
+  onUpdate: (rec: CRMRecord) => void;
+}) {
+  const [val, setVal] = useState('');
+
+  const handleSave = () => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+
+    const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
+    const activeSessionUserName = isUserSaved ? JSON.parse(isUserSaved)?.name : 'Geovanni Andrade';
+
+    const newEntry: FollowupEntry = {
+      id: `f_add_${Math.random().toString(36).substring(2, 9)}`,
+      fecha: getMexicoCityDateTimeShortString(),
+      tipo: 'Llamada Telefónica',
+      creador: activeSessionUserName || 'Geovanni Andrade',
+      notas: trimmed
+    };
+
+    const updatedAcciones = [...(record.acciones_seguimiento || []), newEntry];
+
+    onUpdate({
+      ...record,
+      acciones_seguimiento: updatedAcciones
+    });
+
+    setVal('');
+  };
+
+  return (
+    <div className="flex items-center gap-1 justify-center max-w-[200px] mx-auto select-text">
+      <input
+        type="text"
+        placeholder="Escribir acción..."
+        value={val}
+        disabled={role === 'Solo Lectura'}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            handleSave();
+            e.currentTarget.blur();
+          }
+        }}
+        className={`w-full text-center text-xs py-1.5 px-2 bg-slate-50 border border-slate-200 rounded hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none text-slate-700 font-semibold`}
+        title="Presiona Enter para agregar el avance de seguimiento..."
+      />
+    </div>
+  );
+}
+
+function HistorialAccionesCell({
+  record,
+  role,
+  onUpdate
+}: {
+  record: CRMRecord;
+  role: string;
+  onUpdate: (rec: CRMRecord) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const list = record.acciones_seguimiento || [];
+  const latest = list.length > 0 ? list[list.length - 1] : null;
+
+  return (
+    <div className="relative inline-block text-left" ref={dropdownRef}>
+      <div className="flex items-center gap-1.5 justify-center">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (list.length > 0) setIsOpen(!isOpen);
+          }}
+          className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold border transition-all flex items-center gap-1 shrink-0 ${
+            list.length > 0
+              ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 cursor-pointer'
+              : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
+          }`}
+          title={list.length > 0 ? "Ver historial de seguimiento" : "Sin historial registrado"}
+        >
+          <History className="w-3.5 h-3.5 text-blue-600" />
+          <span>{list.length}</span>
+        </button>
+
+        {latest ? (
+          <div className="text-[11px] text-slate-600 max-w-[120px] truncate text-left" title={latest.notas}>
+            <span className="font-bold text-slate-750">{latest.tipo}:</span> {latest.notas}
+          </div>
+        ) : (
+          <span className="text-[11px] text-slate-400 italic">No hay logs</span>
+        )}
+      </div>
+
+      {isOpen && list.length > 0 && (
+        <div className="absolute right-0 mt-1 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-3 text-left animate-in fade-in duration-150">
+          <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider font-mono mb-2 border-b pb-1">
+            Historial de Acciones ({list.length})
+          </h5>
+          <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+            {[...list].reverse().map((item, idx) => (
+              <div key={item.id || idx} className="text-xs border-b border-slate-50 last:border-0 pb-2 last:pb-0">
+                <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono font-bold">
+                  <span>{item.fecha}</span>
+                  <span className="uppercase text-slate-500">{item.creador}</span>
+                </div>
+                <div className="font-bold text-slate-800 mt-0.5">{item.tipo}</div>
+                <p className="text-slate-600 mt-1 leading-normal bg-slate-50 p-1.5 rounded text-[11px] border border-slate-100 whitespace-pre-wrap select-text">
+                  {item.notas}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubtasksProgressCell({
+  record,
+  kanbanMeta
+}: {
+  record: CRMRecord;
+  kanbanMeta: Record<string, any>;
+}) {
+  const meta = kanbanMeta[record.id];
+  let subtasks: { id: string; text: string; completed: boolean }[] = [];
+  
+  if (meta && meta.subtasks) {
+    subtasks = meta.subtasks;
+  } else if (record.checklist_tasks) {
+    try {
+      subtasks = JSON.parse(record.checklist_tasks);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const total = subtasks.length;
+  const completed = subtasks.filter(s => s.completed).length;
+
+  if (total === 0) {
+    return <span className="text-xs text-slate-400 italic">Sin tareas</span>;
+  }
+
+  const pct = Math.round((completed / total) * 100);
+
+  return (
+    <div className="flex flex-col items-center justify-center gap-1.5 max-w-[120px] mx-auto select-none">
+      <div className="flex items-center gap-2">
+        <div className="relative w-8 h-8 flex items-center justify-center shrink-0">
+          <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+            <circle
+              cx="16"
+              cy="16"
+              r="12"
+              className="stroke-slate-100 fill-none"
+              strokeWidth="2.5"
+            />
+            <circle
+              cx="16"
+              cy="16"
+              r="12"
+              className="stroke-blue-600 fill-none transition-all duration-300"
+              strokeWidth="2.5"
+              strokeDasharray={2 * Math.PI * 12}
+              strokeDashoffset={2 * Math.PI * 12 * (1 - pct / 100)}
+            />
+          </svg>
+          <span className="text-[9px] font-black font-mono text-slate-700">{pct}%</span>
+        </div>
+        
+        <div className="text-left shrink-0">
+          <div className="text-[10px] font-extrabold text-slate-800 leading-tight">
+            {completed}/{total}
+          </div>
+          <div className="text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+            Tareas
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

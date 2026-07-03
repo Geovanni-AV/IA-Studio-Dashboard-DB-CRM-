@@ -54,6 +54,21 @@ export interface CRMRecord {
   nivel_termo?: string | null;
   prioridad?: number | null;
   estado?: string | null;
+  
+  // Nuevos campos para persistencia en Supabase
+  fecha_cambio_etapa?: string | null;
+  stagnation_days_limit?: number | null;
+  checklist_tasks?: string | null;
+  __tareas?: { id: string; text: string; completed: boolean }[] | null;
+  contacto_asignado_id?: string | null;
+  responsable?: string | null;
+  tags?: string | null;
+  
+  // Campos de contacto asignado
+  contacto_nombre?: string | null;
+  contacto_puesto?: string | null;
+  contacto_email?: string | null;
+  contacto_telefono?: string | null;
 }
 
 export interface AuditLog {

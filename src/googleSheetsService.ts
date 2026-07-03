@@ -255,10 +255,10 @@ export async function syncFromGoogleSheets(
         const sub = hasSub ? rawSub : (hw + sv);
         
         const hasIva = getVal(ivaIdx) !== '';
-        const iva = hasIva ? getNum(ivaIdx) : (sub * 0.16);
+        const iva = hasIva ? getNum(ivaIdx) : 0;
         
         const hasTot = getVal(totalIdx) !== '';
-        const tot = hasTot ? getNum(totalIdx) : (sub + iva);
+        const tot = hasTot ? getNum(totalIdx) : sub;
 
         // Smart status detection to handle empty strings or match order presence
         const rawStatusStr = getVal(statusIdx);
@@ -352,12 +352,12 @@ export async function pushToGoogleSheets(
     return { success: true, logs };
   }
 
-  // Strict 16% VAT compliance
-  const subtotal = record.total_hardware_cotizacion + record.total_servicios_cotizacion;
-  const iva = subtotal * 0.16;
-  const total = subtotal + iva;
+  // Strict 16% VAT compliance deactivated - Respecting exact quote amounts
+  const subtotal = (record.total_hardware_cotizacion || 0) + (record.total_servicios_cotizacion || 0);
+  const iva = 0;
+  const total = subtotal;
   
-  addLog(`Fórmula fiscal del IVA validada para folio ${record.informacion_general_folio}: Hardware=${record.total_hardware_cotizacion}, Servicios=${record.total_servicios_cotizacion}, IVA(16%)=${iva}, Total=${total}.`, 'info');
+  addLog(`Fórmula fiscal del IVA desactivada para folio ${record.informacion_general_folio}: Hardware=${record.total_hardware_cotizacion}, Servicios=${record.total_servicios_cotizacion}, IVA=0, Total=${total}.`, 'info');
 
   try {
     if (accessToken) {
