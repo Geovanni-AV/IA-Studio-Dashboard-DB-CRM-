@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { CRMRecord, Contact, AuditLog, UserAccount, UserRole, PurchaseOrder } from './types';
 import { getMexicoCityDateTimeString, getMexicoCityDateString } from './dateUtils';
+import { safeJsonParse } from './utils/coreUtils';
 
 // Deterministic UUID converter for type-safe Supabase ID mapping
 export function toValidUUID(str: string): string {
@@ -475,9 +476,10 @@ export function mapRawCRMRecord(r: any): CRMRecord {
   } else if (typeof rawAcciones === 'string' && rawAcciones.trim() !== '') {
     const trimmed = rawAcciones.trim();
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-      try {
-        acciones_parsed = JSON.parse(trimmed);
-      } catch (e) {
+      const parsed = safeJsonParse<any[] | null>(trimmed, null, 'acciones_seguimiento');
+      if (parsed) {
+        acciones_parsed = parsed;
+      } else {
         // Fallback to single legacy entry if JSON structure parse fails
         acciones_parsed = [{
           id: `f_legacy_${Math.random().toString(36).substring(2, 9)}`,
@@ -577,12 +579,8 @@ export function mapRawCRMRecord(r: any): CRMRecord {
       const t = getFlexibleValue(r, ['__tareas', 'tareas']);
       if (!t) return [];
       if (Array.isArray(t)) return t;
-      try {
-        const parsed = JSON.parse(t);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        return [];
-      }
+      const parsed = safeJsonParse<any[]>(t, [], '__tareas');
+      return Array.isArray(parsed) ? parsed : [];
     })(),
     contacto_asignado_id: cleanStr(getFlexibleValue(r, ['contacto_asignado_id', 'contacto_asignado_id', 'responsable_id'])) || null,
     responsable: cleanStr(getFlexibleValue(r, ['responsable', 'responsable', 'propietario', 'owner'])) || null,
@@ -2078,7 +2076,7 @@ export async function bulkUploadToSupabase(
 /**
  * Obtiene la configuración del tablero de CRM (Columnas y Límites)
  */
-export async function getCRMSettings(urlInput?: string, keyInput?: string): Promise<{ id: string; kanban_columns: string[]; wip_limits: Record<string, number> } | null> {
+export async function getCRMSettings(urlInput?: string, keyInput?: string): Promise<{ id: string; kanban_columns: string[]; wip_limits: Record<string, number>; exchange_rate_usd_mxn?: number } | null> {
   const url = urlInput || localStorage.getItem('verse_supabase_url') || '';
   const key = keyInput || localStorage.getItem('verse_supabase_key') || '';
   const client = getSupabaseClient(url, key);
@@ -2107,7 +2105,7 @@ export async function getCRMSettings(urlInput?: string, keyInput?: string): Prom
  * Guarda o actualiza la configuración del tablero de CRM (Columnas y Límites)
  */
 export async function updateCRMSettings(
-  settings: { id?: string; kanban_columns: string[]; wip_limits: Record<string, number> },
+  settings: { id?: string; kanban_columns: string[]; wip_limits: Record<string, number>; exchange_rate_usd_mxn?: number },
   urlInput?: string,
   keyInput?: string
 ): Promise<boolean> {
@@ -2123,7 +2121,8 @@ export async function updateCRMSettings(
         .from('crm_settings')
         .update({
           kanban_columns: settings.kanban_columns,
-          wip_limits: settings.wip_limits
+          wip_limits: settings.wip_limits,
+          ...(settings.exchange_rate_usd_mxn !== undefined ? { exchange_rate_usd_mxn: settings.exchange_rate_usd_mxn } : {})
         })
         .eq('id', settings.id);
       error = err;
@@ -2132,7 +2131,8 @@ export async function updateCRMSettings(
         .from('crm_settings')
         .upsert({
           kanban_columns: settings.kanban_columns,
-          wip_limits: settings.wip_limits
+          wip_limits: settings.wip_limits,
+          ...(settings.exchange_rate_usd_mxn !== undefined ? { exchange_rate_usd_mxn: settings.exchange_rate_usd_mxn } : {})
         });
       error = err;
     }
@@ -2149,6 +2149,84 @@ export async function updateCRMSettings(
 }
 
 /**
+ * Servicio automatizado para verificar y actualizar el tipo de cambio diario
+ * Adaptado para usar la inicialización dinámica de getSupabaseClient
+ */
+export const syncDailyExchangeRate = async (urlInput?: string, keyInput?: string): Promise<number> => {
+  const url = urlInput || localStorage.getItem('verse_supabase_url') || '';
+  const key = keyInput || localStorage.getItem('verse_supabase_key') || '';
+  const client = getSupabaseClient(url, key);
+  
+  const defaultRate = 17.05;
+
+  if (!client) {
+    console.warn("⚠️ No hay cliente Supabase disponible para sincronizar el tipo de cambio. Usando fallback local.");
+    return defaultRate;
+  }
+
+  try {
+    // 1. Obtener la configuración actual de Supabase de forma segura (tolerante a duplicados)
+    const { data: settingsData, error: fetchError } = await client
+      .from('crm_settings')
+      .select('id, exchange_rate_usd_mxn, exchange_rate_updated_at')
+      .order('exchange_rate_updated_at', { ascending: false }) // Traer siempre el más reciente
+      .limit(1);
+
+    if (fetchError) throw fetchError;
+
+    // Extraemos el primer registro de la lista de forma segura
+    const settings = settingsData && settingsData.length > 0 ? settingsData[0] : null;
+
+    const todayStr = new Date().toISOString().split('T')[0]; // Ej: "2026-03-30"
+    
+    // Si ya se actualizó hoy, retornamos el valor existente de inmediato
+    if (settings?.exchange_rate_updated_at) {
+      const lastUpdateStr = new Date(settings.exchange_rate_updated_at).toISOString().split('T')[0];
+      if (todayStr === lastUpdateStr && settings.exchange_rate_usd_mxn) {
+        return Number(settings.exchange_rate_usd_mxn);
+      }
+    }
+
+    // 2. Si es un nuevo día, consultamos la API gratuita de tipo de cambio
+    console.log("🔄 Sincronizando tipo de cambio del día de hoy con API externa...");
+    const response = await fetch('https://open.er-api.com/v6/latest/USD');
+    if (!response.ok) throw new Error('Error al consultar la API de tipos de cambio');
+    
+    const apiData = await response.json();
+    const newRate = apiData?.rates?.MXN;
+
+    if (!newRate || typeof newRate !== 'number') {
+      throw new Error('Formato de respuesta de API inválido');
+    }
+
+    // 3. Guardar el nuevo tipo de cambio en Supabase
+    if (settings?.id) {
+      await client
+        .from('crm_settings')
+        .update({
+          exchange_rate_usd_mxn: newRate,
+          exchange_rate_updated_at: new Date().toISOString()
+        })
+        .eq('id', settings.id);
+    } else {
+      await client
+        .from('crm_settings')
+        .insert([{
+          exchange_rate_usd_mxn: newRate,
+          exchange_rate_updated_at: new Date().toISOString()
+        }]);
+    }
+
+    console.log(`✅ Tipo de Cambio actualizado en Base de Datos: $${newRate} MXN/USD`);
+    return newRate;
+
+  } catch (error) {
+    console.error("🚨 Falló la automatización del tipo de cambio. Usando fallback seguro.", error);
+    return defaultRate;
+  }
+};
+
+/**
  * Escucha en vivo los cambios en la configuración del tablero (Columnas y Límites)
  */
 export const subscribeToCRMSettings = (
@@ -2161,8 +2239,11 @@ export const subscribeToCRMSettings = (
   const client = getSupabaseClient(url, key);
   if (!client) return null;
 
+  // Generamos un ID único para evitar choques con el Strict Mode de React
+  const uniqueChannelId = `crm_settings_changes_${Math.random().toString(36).substring(7)}`;
+
   const channel = client
-    .channel('crm_settings_changes')
+    .channel(uniqueChannelId)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'crm_settings' },
@@ -2183,8 +2264,11 @@ export const subscribeToCRMRecords = (url: string, key: string, onUpdate: (paylo
   const client = getSupabaseClient(url, key);
   if (!client) return null;
 
+  // Generamos un ID único aquí también
+  const uniqueChannelId = `db_crm_changes_${Math.random().toString(36).substring(7)}`;
+
   const channel = client
-    .channel('db_crm_changes')
+    .channel(uniqueChannelId)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: getResolvedCRMTableName() },
@@ -2373,6 +2457,8 @@ create table if not exists crm_settings (
   id uuid primary key default gen_random_uuid(),
   kanban_columns text[] default array['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'],
   wip_limits jsonb default '{}'::jsonb,
+  exchange_rate_usd_mxn numeric default 17.05,
+  exchange_rate_updated_at text,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

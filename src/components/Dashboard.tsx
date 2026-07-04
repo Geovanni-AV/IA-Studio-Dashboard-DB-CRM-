@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { safeRound } from '../utils/coreUtils';
 import { CRMRecord, UserRole } from '../types';
 import { 
   TrendingUp, 
@@ -190,90 +191,117 @@ export default function Dashboard({
     );
   };
 
-  // Filtering Logic
-  const filteredRecords = records.filter(r => {
-    // A. Year Filter (Y-M-D)
-    if (selectedYear !== 'Todos') {
-      const dateStr = r.fecha_registro || r.fecha_inicio_proyecto || '';
-      const year = dateStr ? dateStr.substring(0, 4) : '';
-      if (year && year !== selectedYear) return false;
-      if (!year && selectedYear !== '2026') return false;
-    }
+  // Filtering Logic (Memoized)
+  const filteredRecords = useMemo(() => {
+    return records.filter(r => {
+      // A. Year Filter (Y-M-D)
+      if (selectedYear !== 'Todos') {
+        const dateStr = r.fecha_registro || r.fecha_inicio_proyecto || '';
+        const year = dateStr ? dateStr.substring(0, 4) : '';
+        if (year && year !== selectedYear) return false;
+        if (!year && selectedYear !== '2026') return false;
+      }
 
-    // B. Status Filter mapped to CRM state
-    if (selectedStatus !== 'Todos los estatus') {
-      const stage = kanbanMeta[r.id]?.stage;
-      if (selectedStatus === 'Propuesta' && stage !== 'Cotizado' && r.estado_proyecto !== 'Propuesta') return false;
-      if (selectedStatus === 'Negociación' && stage !== 'Negociación' && r.estado_proyecto !== 'Negociación') return false;
-      if (selectedStatus === 'Ganado' && stage !== 'Cerrado Ganado' && r.estado_proyecto !== 'Cerrado Ganado') return false;
-    }
+      // B. Status Filter mapped to CRM state
+      if (selectedStatus !== 'Todos los estatus') {
+        const stage = kanbanMeta[r.id]?.stage;
+        if (selectedStatus === 'Propuesta' && stage !== 'Cotizado' && r.estado_proyecto !== 'Propuesta') return false;
+        if (selectedStatus === 'Negociación' && stage !== 'Negociación' && r.estado_proyecto !== 'Negociación') return false;
+        if (selectedStatus === 'Ganado' && stage !== 'Cerrado Ganado' && r.estado_proyecto !== 'Cerrado Ganado') return false;
+      }
 
-    // C. Country Filter
-    if (selectedCountry !== 'Todos los países') {
-      if (selectedCountry === 'México' && r.cliente_pais !== 'México') return false;
-      if (selectedCountry === 'EE.UU.' && r.cliente_pais !== 'EE.UU.') return false;
-    }
+      // C. Country Filter
+      if (selectedCountry !== 'Todos los países') {
+        if (selectedCountry === 'México' && r.cliente_pais !== 'México') return false;
+        if (selectedCountry === 'EE.UU.' && r.cliente_pais !== 'EE.UU.') return false;
+      }
 
-    return true;
-  });
+      return true;
+    });
+  }, [records, selectedYear, selectedStatus, selectedCountry, kanbanMeta]);
 
-  // Calculate Real KPI Elements
+  // Calculate Real KPI Elements (Memoized)
   const totalLeadsRaw = filteredRecords.length;
   
-  // Checking active projects count (stage not closed lost, or custom checks)
-  const activeProjectsCount = filteredRecords.filter(r => {
-    const stage = kanbanMeta[r.id]?.stage;
-    return stage !== 'Cerrado Perdido';
-  }).length;
-
-  const computePipelineSumForYear = (yrStr: string) => {
-    return records.filter(r => {
-      const dateStr = r.fecha_registro || r.fecha_inicio_proyecto || '';
-      const yr = dateStr ? dateStr.substring(0, 4) : '2026';
-      if (yr !== yrStr) return false;
-      if (selectedCountry !== 'Todos los países' && r.cliente_pais !== selectedCountry) return false;
-      
+  // Checking active projects count (stage not closed lost, or custom checks) (Memoized)
+  const activeProjectsCount = useMemo(() => {
+    return filteredRecords.filter(r => {
       const stage = kanbanMeta[r.id]?.stage;
       return stage !== 'Cerrado Perdido';
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
-  };
+    }).length;
+  }, [filteredRecords, kanbanMeta]);
 
-  const pipeline2026_val = computePipelineSumForYear('2026');
-  const pipeline2027_val = computePipelineSumForYear('2027');
+  const computePipelineSumForYear = useMemo(() => {
+    return (yrStr: string) => {
+      const sum = records.filter(r => {
+        const dateStr = r.fecha_registro || r.fecha_inicio_proyecto || '';
+        const yr = dateStr ? dateStr.substring(0, 4) : '2026';
+        if (yr !== yrStr) return false;
+        if (selectedCountry !== 'Todos los países' && r.cliente_pais !== selectedCountry) return false;
+        
+        const stage = kanbanMeta[r.id]?.stage;
+        return stage !== 'Cerrado Perdido';
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+      return safeRound(sum);
+    };
+  }, [records, selectedCountry, kanbanMeta, currentCurrency, exchangeRate]);
 
-  // Temperature aggregates
-  const hotRecords = filteredRecords.filter(r => {
-    const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-    return temp === 'Hot' || stage === 'Negociación';
-  });
-  const hotAmount = hotRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  const pipeline2026_val = useMemo(() => computePipelineSumForYear('2026'), [computePipelineSumForYear]);
+  const pipeline2027_val = useMemo(() => computePipelineSumForYear('2027'), [computePipelineSumForYear]);
 
-  const warmRecords = filteredRecords.filter(r => {
-    const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-    return temp === 'Warm' || stage === 'Cotizado';
-  });
-  const warmAmount = warmRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  // Temperature aggregates (Memoized)
+  const hotRecords = useMemo(() => {
+    return filteredRecords.filter(r => {
+      const stage = kanbanMeta[r.id]?.stage;
+      const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+      return temp === 'Hot' || stage === 'Negociación';
+    });
+  }, [filteredRecords, kanbanMeta]);
 
-  const coolRecords = filteredRecords.filter(r => {
-    const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-    return temp === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!temp && !stage);
-  });
-  const coolAmount = coolRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  const hotAmount = useMemo(() => {
+    return safeRound(hotRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0));
+  }, [hotRecords, currentCurrency, exchangeRate]);
 
-  const winRecords = filteredRecords.filter(r => {
-    const stage = kanbanMeta[r.id]?.stage;
-    const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-    return temp === 'Win' || stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
-  });
-  const winAmount = winRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  const warmRecords = useMemo(() => {
+    return filteredRecords.filter(r => {
+      const stage = kanbanMeta[r.id]?.stage;
+      const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+      return temp === 'Warm' || stage === 'Cotizado';
+    });
+  }, [filteredRecords, kanbanMeta]);
+
+  const warmAmount = useMemo(() => {
+    return safeRound(warmRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0));
+  }, [warmRecords, currentCurrency, exchangeRate]);
+
+  const coolRecords = useMemo(() => {
+    return filteredRecords.filter(r => {
+      const stage = kanbanMeta[r.id]?.stage;
+      const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+      return temp === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!temp && !stage);
+    });
+  }, [filteredRecords, kanbanMeta]);
+
+  const coolAmount = useMemo(() => {
+    return safeRound(coolRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0));
+  }, [coolRecords, currentCurrency, exchangeRate]);
+
+  const winRecords = useMemo(() => {
+    return filteredRecords.filter(r => {
+      const stage = kanbanMeta[r.id]?.stage;
+      const temp = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+      return temp === 'Win' || stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
+    });
+  }, [filteredRecords, kanbanMeta]);
+
+  const winAmount = useMemo(() => {
+    return safeRound(winRecords.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0));
+  }, [winRecords, currentCurrency, exchangeRate]);
 
   // Link visualization option to our interactive toggle state
   const hasRealData = visualizationMode === 'real';
 
-  // Resolved Display Values
+  // Resolved Display Values (Memoized)
   const displayActiveProjects = hasRealData ? activeProjectsCount : 52;
   const displayPipeline2026 = hasRealData ? pipeline2026_val : 4000000;
   const displayPipeline2027 = hasRealData ? pipeline2027_val : 459000;
@@ -282,239 +310,304 @@ export default function Dashboard({
   const displayCoolAmount = hasRealData ? coolAmount : 3300000;
   const displayWinAmount = hasRealData ? winAmount : 467000;
 
-  // Sales & Target definitions
+  // Sales & Target definitions (Memoized)
   const annualTargetMxn = 5100000;
-  const annualTarget = currentCurrency === 'MXN' ? annualTargetMxn : annualTargetMxn / exchangeRate;
+  const annualTarget = useMemo(() => {
+    return currentCurrency === 'MXN' ? annualTargetMxn : annualTargetMxn / exchangeRate;
+  }, [currentCurrency, exchangeRate]);
+
   const displayRealSales = displayWinAmount;
-  const fulfillmentPercent = annualTarget > 0 ? (displayRealSales / annualTarget) * 100 : 0;
-  const displayCoverage = annualTarget > 0 ? (displayHotAmount + displayWarmAmount + displayCoolAmount) / annualTarget : 1.2;
-  const displayTicketAvg = activeProjectsCount > 0 ? (displayHotAmount + displayWarmAmount + displayCoolAmount + displayWinAmount) / activeProjectsCount : 95000;
+  
+  const fulfillmentPercent = useMemo(() => {
+    return annualTarget > 0 ? (displayRealSales / annualTarget) * 100 : 0;
+  }, [displayRealSales, annualTarget]);
 
-  // Closed calculations
-  const wonCount = filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado').length;
-  const lostCount = filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cerrado Perdido').length;
-  const closedCountTotal = wonCount + lostCount;
-  const displayWinRate = closedCountTotal > 0 ? Math.round((wonCount / closedCountTotal) * 100) : 92;
-  const displaySlippageRate = activeProjectsCount > 0 ? Math.round((coolRecords.length / activeProjectsCount) * 100) : 18;
+  const displayCoverage = useMemo(() => {
+    return annualTarget > 0 ? (displayHotAmount + displayWarmAmount + displayCoolAmount) / annualTarget : 1.2;
+  }, [displayHotAmount, displayWarmAmount, displayCoolAmount, annualTarget]);
 
-  // CRM funnel values
+  const displayTicketAvg = useMemo(() => {
+    return activeProjectsCount > 0 ? (displayHotAmount + displayWarmAmount + displayCoolAmount + displayWinAmount) / activeProjectsCount : 95000;
+  }, [displayHotAmount, displayWarmAmount, displayCoolAmount, displayWinAmount, activeProjectsCount]);
+
+  // Closed calculations (Memoized)
+  const wonCount = useMemo(() => {
+    return filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado').length;
+  }, [filteredRecords, kanbanMeta]);
+
+  const lostCount = useMemo(() => {
+    return filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cerrado Perdido').length;
+  }, [filteredRecords, kanbanMeta]);
+
+  const closedCountTotal = useMemo(() => wonCount + lostCount, [wonCount, lostCount]);
+  
+  const displayWinRate = useMemo(() => {
+    return closedCountTotal > 0 ? Math.round((wonCount / closedCountTotal) * 100) : 92;
+  }, [wonCount, closedCountTotal]);
+
+  const displaySlippageRate = useMemo(() => {
+    return activeProjectsCount > 0 ? Math.round((coolRecords.length / activeProjectsCount) * 100) : 18;
+  }, [coolRecords, activeProjectsCount]);
+
+  // CRM funnel values (Memoized)
   const leadsCount = totalLeadsRaw > 0 ? totalLeadsRaw : 144;
-  const mqlCount = totalLeadsRaw > 0 ? filteredRecords.filter(r => ['Nuevo', 'Contactado'].includes(kanbanMeta[r.id]?.stage || '')).length : 79;
-  const sqlCount = totalLeadsRaw > 0 ? filteredRecords.filter(r => ['Cotizado', 'Negociación'].includes(kanbanMeta[r.id]?.stage || '')).length : 46;
-  const propuestaCount = totalLeadsRaw > 0 ? filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cotizado').length : 28;
-  const negociacionCount = totalLeadsRaw > 0 ? filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Negociación').length : 14;
+  
+  const mqlCount = useMemo(() => {
+    return totalLeadsRaw > 0 ? filteredRecords.filter(r => ['Nuevo', 'Contactado'].includes(kanbanMeta[r.id]?.stage || '')).length : 79;
+  }, [totalLeadsRaw, filteredRecords, kanbanMeta]);
+
+  const sqlCount = useMemo(() => {
+    return totalLeadsRaw > 0 ? filteredRecords.filter(r => ['Cotizado', 'Negociación'].includes(kanbanMeta[r.id]?.stage || '')).length : 46;
+  }, [totalLeadsRaw, filteredRecords, kanbanMeta]);
+
+  const propuestaCount = useMemo(() => {
+    return totalLeadsRaw > 0 ? filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Cotizado').length : 28;
+  }, [totalLeadsRaw, filteredRecords, kanbanMeta]);
+
+  const negociacionCount = useMemo(() => {
+    return totalLeadsRaw > 0 ? filteredRecords.filter(r => kanbanMeta[r.id]?.stage === 'Negociación').length : 14;
+  }, [totalLeadsRaw, filteredRecords, kanbanMeta]);
+
   const ganadoCount = totalLeadsRaw > 0 ? wonCount : 6;
 
-  const finalFunnel = {
-    leads: leadsCount,
-    mql: mqlCount,
-    sql: sqlCount,
-    propuesta: propuestaCount,
-    negociacion: negociacionCount,
-    ganado: ganadoCount,
-  };
-
-  // Dynamic Chart 1 Monthly Data (Sales vs Target vs Projection)
-  const monthlyLabelList = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-  const monthlyValuesData = monthlyLabelList.map((mName, mIdx) => {
-    const monthlyTarget = annualTarget / 12;
-    
-    const wonInMonth = records.filter(r => {
-      if (!r.fecha_registro) return false;
-      const parts = r.fecha_registro.split('-');
-      if (parts.length >= 2) {
-        return parts[0] === selectedYear && (parseInt(parts[1], 10) - 1) === mIdx;
-      }
-      return false;
-    }).filter(r => {
-      const stage = kanbanMeta[r.id]?.stage;
-      return stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
-
-    const projInMonth = records.filter(r => {
-      if (!r.fecha_registro) return false;
-      const parts = r.fecha_registro.split('-');
-      if (parts.length >= 2) {
-        return parts[0] === selectedYear && (parseInt(parts[1], 10) - 1) === mIdx;
-      }
-      return false;
-    }).filter(r => {
-      const stage = kanbanMeta[r.id]?.stage;
-      return stage !== 'Cerrado Ganado' && stage !== 'Cerrado Perdido';
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
-
+  const finalFunnel = useMemo(() => {
     return {
-      name: mName,
-      sales: wonInMonth,
-      projection: projInMonth,
-      target: monthlyTarget
+      leads: leadsCount,
+      mql: mqlCount,
+      sql: sqlCount,
+      propuesta: propuestaCount,
+      negociacion: negociacionCount,
+      ganado: ganadoCount,
     };
-  });
+  }, [leadsCount, mqlCount, sqlCount, propuestaCount, negociacionCount, ganadoCount]);
 
-  const maxMonthValue = Math.max(
-    ...monthlyValuesData.map(m => Math.max(m.sales, m.projection, m.target)),
-    1
-  );
+  // Dynamic Chart 1 Monthly Data (Sales vs Target vs Projection) (Memoized)
+  const monthlyLabelList = useMemo(() => ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'], []);
+  
+  const monthlyValuesData = useMemo(() => {
+    return monthlyLabelList.map((mName, mIdx) => {
+      const monthlyTarget = annualTarget / 12;
+      
+      const wonInMonth = records.filter(r => {
+        if (!r.fecha_registro) return false;
+        const parts = r.fecha_registro.split('-');
+        if (parts.length >= 2) {
+          return parts[0] === selectedYear && (parseInt(parts[1], 10) - 1) === mIdx;
+        }
+        return false;
+      }).filter(r => {
+        const stage = kanbanMeta[r.id]?.stage;
+        return stage === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
-  const computedGraphData = monthlyValuesData.map(m => {
-    const targetPct = Math.min(100, Math.round((m.target / maxMonthValue) * 100));
-    const salesPct = m.target > 0 ? Math.min(100, Math.round((m.sales / m.target) * 100)) : 0;
-    const hasProjection = m.projection > 0 && m.sales === 0;
-    const projTop = hasProjection ? Math.max(10, Math.round(100 - (m.projection / maxMonthValue) * 100)) : 0;
+      const projInMonth = records.filter(r => {
+        if (!r.fecha_registro) return false;
+        const parts = r.fecha_registro.split('-');
+        if (parts.length >= 2) {
+          return parts[0] === selectedYear && (parseInt(parts[1], 10) - 1) === mIdx;
+        }
+        return false;
+      }).filter(r => {
+        const stage = kanbanMeta[r.id]?.stage;
+        return stage !== 'Cerrado Ganado' && stage !== 'Cerrado Perdido';
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
 
-    return {
-      name: m.name,
-      salesPct,
-      targetPct: Math.max(10, targetPct),
-      hasProjection,
-      projTop,
-      salesVal: m.sales,
-      projVal: m.projection
-    };
-  });
+      return {
+        name: mName,
+        sales: wonInMonth,
+        projection: projInMonth,
+        target: monthlyTarget
+      };
+    });
+  }, [monthlyLabelList, annualTarget, records, selectedYear, kanbanMeta, currentCurrency, exchangeRate]);
+
+  const maxMonthValue = useMemo(() => {
+    return Math.max(
+      ...monthlyValuesData.map(m => Math.max(m.sales, m.projection, m.target)),
+      1
+    );
+  }, [monthlyValuesData]);
+
+  const computedGraphData = useMemo(() => {
+    return monthlyValuesData.map(m => {
+      const targetPct = Math.min(100, Math.round((m.target / maxMonthValue) * 100));
+      const salesPct = m.target > 0 ? Math.min(100, Math.round((m.sales / m.target) * 100)) : 0;
+      const hasProjection = m.projection > 0 && m.sales === 0;
+      const projTop = hasProjection ? Math.max(10, Math.round(100 - (m.projection / maxMonthValue) * 100)) : 0;
+
+      return {
+        name: m.name,
+        salesPct,
+        targetPct: Math.max(10, targetPct),
+        hasProjection,
+        projTop,
+        salesVal: m.sales,
+        projVal: m.projection
+      };
+    });
+  }, [monthlyValuesData, maxMonthValue]);
 
   const activeGraphData = computedGraphData;
 
-  // Dynamic Chart 2 Quarterly Stacked data
-  const targetYearNum = parseInt(selectedYear, 10);
-  const quartersLabels = [
-    `${targetYearNum - 1}-Q3`,
-    `${targetYearNum - 1}-Q4`,
-    `${targetYearNum}-Q1`,
-    `${targetYearNum}-Q2`,
-    `${targetYearNum}-Q3`,
-    `${targetYearNum}-Q4`,
-    `${targetYearNum + 1}-Q1`,
-  ];
+  // Dynamic Chart 2 Quarterly Stacked data (Memoized)
+  const targetYearNum = useMemo(() => parseInt(selectedYear, 10), [selectedYear]);
+  
+  const quartersLabels = useMemo(() => {
+    return [
+      `${targetYearNum - 1}-Q3`,
+      `${targetYearNum - 1}-Q4`,
+      `${targetYearNum}-Q1`,
+      `${targetYearNum}-Q2`,
+      `${targetYearNum}-Q3`,
+      `${targetYearNum}-Q4`,
+      `${targetYearNum + 1}-Q1`,
+    ];
+  }, [targetYearNum]);
 
-  const computedQuartersData = quartersLabels.map(labelStr => {
-    const [yrStr, qStr] = labelStr.split('-Q');
-    const qYear = parseInt(yrStr, 10);
-    const qNum = parseInt(qStr, 10);
+  const computedQuartersData = useMemo(() => {
+    return quartersLabels.map(labelStr => {
+      const [yrStr, qStr] = labelStr.split('-Q');
+      const qYear = parseInt(yrStr, 10);
+      const qNum = parseInt(qStr, 10);
 
-    const qRecords = records.filter(r => {
-      if (!r.fecha_registro) return false;
-      const parts = r.fecha_registro.split('-');
-      if (parts.length >= 2) {
-        const yr = parseInt(parts[0], 10);
-        const mn = parseInt(parts[1], 10) - 1;
-        const qNo = Math.floor(mn / 3) + 1;
-        return yr === qYear && qNo === qNum;
-      }
-      return false;
+      const qRecords = records.filter(r => {
+        if (!r.fecha_registro) return false;
+        const parts = r.fecha_registro.split('-');
+        if (parts.length >= 2) {
+          const yr = parseInt(parts[0], 10);
+          const mn = parseInt(parts[1], 10) - 1;
+          const qNo = Math.floor(mn / 3) + 1;
+          return yr === qYear && qNo === qNum;
+        }
+        return false;
+      });
+
+      const hSum = qRecords.filter(r => {
+        const stage = kanbanMeta[r.id]?.stage;
+        const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+        return t === 'Hot' || stage === 'Negociación';
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+
+      const wSum = qRecords.filter(r => {
+        const stage = kanbanMeta[r.id]?.stage;
+        const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+        return t === 'Warm' || stage === 'Cotizado';
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+
+      const cSum = qRecords.filter(r => {
+        const stage = kanbanMeta[r.id]?.stage;
+        const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
+        return t === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!t && !stage);
+      }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+
+      return {
+        label: labelStr,
+        hotSum: hSum,
+        warmSum: wSum,
+        coolSum: cSum,
+      };
     });
+  }, [quartersLabels, records, kanbanMeta, currentCurrency, exchangeRate]);
 
-    const hSum = qRecords.filter(r => {
-      const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-      return t === 'Hot' || stage === 'Negociación';
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  const maxQValue = useMemo(() => {
+    return Math.max(
+      ...computedQuartersData.map(q => q.hotSum + q.warmSum + q.coolSum),
+      1
+    );
+  }, [computedQuartersData]);
 
-    const wSum = qRecords.filter(r => {
-      const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-      return t === 'Warm' || stage === 'Cotizado';
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+  const activeQuarterPercentages = useMemo(() => {
+    return computedQuartersData.map(q => {
+      const total = q.hotSum + q.warmSum + q.coolSum;
+      const heightPct = Math.round((total / maxQValue) * 100);
+      const hotPct = total > 0 ? Math.round((q.hotSum / total) * 100) : 0;
+      const warmPct = total > 0 ? Math.round((q.warmSum / total) * 100) : 0;
+      const coolPct = total > 0 ? Math.round((q.coolSum / total) * 100) : 0;
 
-    const cSum = qRecords.filter(r => {
-      const stage = kanbanMeta[r.id]?.stage;
-      const t = r.status_proyecto || r.prioridad_nivel || r.nivel_termo;
-      return t === 'Cool' || stage === 'Nuevo' || stage === 'Contactado' || (!t && !stage);
-    }).reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
-
-    return {
-      label: labelStr,
-      hotSum: hSum,
-      warmSum: wSum,
-      coolSum: cSum,
-    };
-  });
-
-  const maxQValue = Math.max(
-    ...computedQuartersData.map(q => q.hotSum + q.warmSum + q.coolSum),
-    1
-  );
-
-  const activeQuarterPercentages = computedQuartersData.map(q => {
-    const total = q.hotSum + q.warmSum + q.coolSum;
-    const heightPct = Math.round((total / maxQValue) * 100);
-    const hotPct = total > 0 ? Math.round((q.hotSum / total) * 100) : 0;
-    const warmPct = total > 0 ? Math.round((q.warmSum / total) * 100) : 0;
-    const coolPct = total > 0 ? Math.round((q.coolSum / total) * 100) : 0;
-
-    return {
-      label: q.label,
-      coolPct,
-      warmPct,
-      hotPct,
-      emptyPct: 100 - hotPct - warmPct - coolPct,
-      coolVal: q.coolSum,
-      warmVal: q.warmSum,
-      hotVal: q.hotSum,
-      heightPct: Math.max(10, heightPct),
-    };
-  });
+      return {
+        label: q.label,
+        coolPct,
+        warmPct,
+        hotPct,
+        emptyPct: 100 - hotPct - warmPct - coolPct,
+        coolVal: q.coolSum,
+        warmVal: q.warmSum,
+        hotVal: q.hotSum,
+        heightPct: Math.max(10, heightPct),
+      };
+    });
+  }, [computedQuartersData, maxQValue]);
 
   const finalQuarters = activeQuarterPercentages;
 
-  // Dynamic Chart 4 sales representative quotas
-  const actualResponsibles = Array.from(new Set(
-    records.map(r => kanbanMeta[r.id]?.responsable).filter(Boolean)
-  )) as string[];
+  // Dynamic Chart 4 sales representative quotas (Memoized)
+  const actualResponsibles = useMemo(() => {
+    return Array.from(new Set(
+      records.map(r => kanbanMeta[r.id]?.responsable).filter(Boolean)
+    )) as string[];
+  }, [records, kanbanMeta]);
+  
   const finalResponsiblesList = actualResponsibles;
 
-  const salesmenComputed = finalResponsiblesList.map(name => {
-    const assignedRecords = records.filter(r => kanbanMeta[r.id]?.responsable === name);
-    const wonOfUser = assignedRecords.filter(r => {
-      const s = kanbanMeta[r.id]?.stage;
-      return s === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
+  const salesmenComputed = useMemo(() => {
+    return finalResponsiblesList.map(name => {
+      const assignedRecords = records.filter(r => kanbanMeta[r.id]?.responsable === name);
+      const wonOfUser = assignedRecords.filter(r => {
+        const s = kanbanMeta[r.id]?.stage;
+        return s === 'Cerrado Ganado' || r.estado_proyecto === 'Cerrado Ganado';
+      });
+      const wonSum = wonOfUser.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
+      const activeC = assignedRecords.filter(r => {
+        const s = kanbanMeta[r.id]?.stage;
+        return s !== 'Cerrado Perdido' && s !== 'Cerrado Ganado';
+      }).length;
+
+      let targetVal = currentCurrency === 'MXN' ? 12000000 : 700000;
+      if (name.includes('Carlos') || name.includes('Mercer')) targetVal = currentCurrency === 'MXN' ? 13000000 : 800000;
+      if (name.includes('Ana') || name.includes('Ventas')) targetVal = currentCurrency === 'MXN' ? 10000000 : 600000;
+      if (name.includes('Luis') || name.includes('Ruiz')) targetVal = currentCurrency === 'MXN' ? 8000000 : 500000;
+      if (name.includes('Sofía') || name.includes('Torres')) targetVal = currentCurrency === 'MXN' ? 11000000 : 700000;
+
+      return {
+        name,
+        won: wonSum,
+        target: targetVal,
+        activeCount: activeC,
+        percentage: targetVal > 0 ? Math.round((wonSum / targetVal) * 100) : 0
+      };
     });
-    const wonSum = wonOfUser.reduce((acc, r) => acc + convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda), 0);
-    const activeC = assignedRecords.filter(r => {
-      const s = kanbanMeta[r.id]?.stage;
-      return s !== 'Cerrado Perdido' && s !== 'Cerrado Ganado';
-    }).length;
-
-    let targetVal = currentCurrency === 'MXN' ? 12000000 : 700000;
-    if (name.includes('Carlos') || name.includes('Mercer')) targetVal = currentCurrency === 'MXN' ? 13000000 : 800000;
-    if (name.includes('Ana') || name.includes('Ventas')) targetVal = currentCurrency === 'MXN' ? 10000000 : 600000;
-    if (name.includes('Luis') || name.includes('Ruiz')) targetVal = currentCurrency === 'MXN' ? 8000000 : 500000;
-    if (name.includes('Sofía') || name.includes('Torres')) targetVal = currentCurrency === 'MXN' ? 11000000 : 700000;
-
-    return {
-      name,
-      won: wonSum,
-      target: targetVal,
-      activeCount: activeC,
-      percentage: targetVal > 0 ? Math.round((wonSum / targetVal) * 100) : 0
-    };
-  });
+  }, [finalResponsiblesList, records, kanbanMeta, currentCurrency, exchangeRate]);
 
   const finalSalesmenList = salesmenComputed;
 
-  // Dynamic Chart 5 Lead conversion source
-  const sourceRawCounts = { Referidos: 0, Web: 0, LinkedIn: 0, Eventos: 0, Outbound: 0, Partners: 0 };
-  filteredRecords.forEach(r => {
-    const combined = `${r.notas_comerciales || ''} ${r.informacion_general_cliente || ''} ${r.informacion_general_proyecto || ''}`.toLowerCase();
-    if (combined.includes('linkedin')) sourceRawCounts.LinkedIn++;
-    else if (combined.includes('web') || combined.includes('inbound') || combined.includes('sitio')) sourceRawCounts.Web++;
-    else if (combined.includes('evento') || combined.includes('expo') || combined.includes('junta') || combined.includes('conferencia')) sourceRawCounts.Eventos++;
-    else if (combined.includes('referido') || combined.includes('recomend') || combined.includes('amigo')) sourceRawCounts.Referidos++;
-    else if (combined.includes('partner') || combined.includes('socio') || combined.includes('asociado')) sourceRawCounts.Partners++;
-    else sourceRawCounts.Outbound++;
-  });
+  // Dynamic Chart 5 Lead conversion source (Memoized)
+  const sourcesDisplay: Record<string, number> = useMemo(() => {
+    const sourceRawCounts = { Referidos: 0, Web: 0, LinkedIn: 0, Eventos: 0, Outbound: 0, Partners: 0 };
+    filteredRecords.forEach(r => {
+      const combined = `${r.notas_comerciales || ''} ${r.informacion_general_cliente || ''} ${r.informacion_general_proyecto || ''}`.toLowerCase();
+      if (combined.includes('linkedin')) sourceRawCounts.LinkedIn++;
+      else if (combined.includes('web') || combined.includes('inbound') || combined.includes('sitio')) sourceRawCounts.Web++;
+      else if (combined.includes('evento') || combined.includes('expo') || combined.includes('junta') || combined.includes('conferencia')) sourceRawCounts.Eventos++;
+      else if (combined.includes('referido') || combined.includes('recomend') || combined.includes('amigo')) sourceRawCounts.Referidos++;
+      else if (combined.includes('partner') || combined.includes('socio') || combined.includes('asociado')) sourceRawCounts.Partners++;
+      else sourceRawCounts.Outbound++;
+    });
 
-  const sourcesDisplay = {
-    Referidos: sourceRawCounts.Referidos,
-    Web: sourceRawCounts.Web,
-    LinkedIn: sourceRawCounts.LinkedIn,
-    Eventos: sourceRawCounts.Eventos,
-    Outbound: sourceRawCounts.Outbound,
-    Partners: sourceRawCounts.Partners,
-  };
-  const maxSourceVal = Math.max(...Object.values(sourcesDisplay), 1);
+    return {
+      Referidos: sourceRawCounts.Referidos,
+      Web: sourceRawCounts.Web,
+      LinkedIn: sourceRawCounts.LinkedIn,
+      Eventos: sourceRawCounts.Eventos,
+      Outbound: sourceRawCounts.Outbound,
+      Partners: sourceRawCounts.Partners,
+    };
+  }, [filteredRecords]);
 
-  // Dynamic Table 6 Upcoming 6 Months projections
+  const maxSourceVal = useMemo(() => {
+    return Math.max(...Object.values(sourcesDisplay), 1);
+  }, [sourcesDisplay]);
+
+  // Dynamic Table 6 Upcoming 6 Months projections (Memoized)
   const getUpcoming6MonthsList = () => {
     const list = [];
     const monthsNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -539,78 +632,84 @@ export default function Dashboard({
     return list;
   };
 
-  const upcomingMonthsData = getUpcoming6MonthsList();
-  filteredRecords.forEach(r => {
-    const temp = r.status_proyecto || r.prioridad_nivel;
-    if (temp !== 'Hot' && temp !== 'Warm') return;
-    
-    const dateStr = r.fecha_registro || r.fecha_inicio_proyecto;
-    if (!dateStr) return;
-    const parts = dateStr.split('-');
-    if (parts.length >= 2) {
-      const yr = parseInt(parts[0], 10);
-      const mn = parseInt(parts[1], 10) - 1;
+  const finalUpcomingMonthsTable = useMemo(() => {
+    const upcomingMonthsData = getUpcoming6MonthsList();
+    filteredRecords.forEach(r => {
+      const temp = r.status_proyecto || r.prioridad_nivel;
+      if (temp !== 'Hot' && temp !== 'Warm') return;
       
-      const matched = upcomingMonthsData.find(u => u.year === yr && u.month === mn);
-      if (matched) {
-        const amount = convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda);
-        if (temp === 'Hot') {
-          matched.hotSum += amount;
-        } else {
-          matched.warmSum += amount;
+      const dateStr = r.fecha_registro || r.fecha_inicio_proyecto;
+      if (!dateStr) return;
+      const parts = dateStr.split('-');
+      if (parts.length >= 2) {
+        const yr = parseInt(parts[0], 10);
+        const mn = parseInt(parts[1], 10) - 1;
+        
+        const matched = upcomingMonthsData.find(u => u.year === yr && u.month === mn);
+        if (matched) {
+          const amount = convertAmount(r.total_subtotal_cotizacion || 0, r.informacion_general_moneda);
+          if (temp === 'Hot') {
+            matched.hotSum += amount;
+          } else {
+            matched.warmSum += amount;
+          }
         }
       }
-    }
-  });
+    });
 
-  const finalUpcomingMonthsTable = upcomingMonthsData.map(m => {
-    const total = m.hotSum + m.warmSum;
-    let status = 'Sin datos';
-    if (m.hotSum > 0) status = 'Alta';
-    else if (m.warmSum > 0) status = 'Media';
-    
-    return {
-      label: m.label,
-      hotVal: m.hotSum,
-      warmVal: m.warmSum,
-      totalVal: total,
-      status
+    return upcomingMonthsData.map(m => {
+      const total = m.hotSum + m.warmSum;
+      let status = 'Sin datos';
+      if (m.hotSum > 0) status = 'Alta';
+      else if (m.warmSum > 0) status = 'Media';
+      
+      return {
+        label: m.label,
+        hotVal: m.hotSum,
+        warmVal: m.warmSum,
+        totalVal: total,
+        status
+      };
+    });
+  }, [filteredRecords, currentCurrency, exchangeRate]);
+
+  // Dynamic Chart 7 Map Locations (Memoized)
+  const mapHotspots = useMemo(() => {
+    const spots = {
+      CDMX: { active: 0, total: 0 },
+      Monterrey: { active: 0, total: 0 },
+      Guadalajara: { active: 0, total: 0 },
+      Tijuana: { active: 0, total: 0 },
+      Cancun: { active: 0, total: 0 },
     };
-  });
 
-  // Dynamic Chart 7 Map Locations
-  const mapHotspots = {
-    CDMX: { active: 0, total: 0 },
-    Monterrey: { active: 0, total: 0 },
-    Guadalajara: { active: 0, total: 0 },
-    Tijuana: { active: 0, total: 0 },
-    Cancun: { active: 0, total: 0 },
-  };
-
-  filteredRecords.forEach(r => {
-    const loc = (r.cliente_ubicacion || '').toLowerCase();
-    const stage = kanbanMeta[r.id]?.stage;
-    let code: 'CDMX' | 'Monterrey' | 'Guadalajara' | 'Tijuana' | 'Cancun' | null = null;
-    
-    if (loc.includes('cdmx') || loc.includes('mexico') || loc.includes('médica') || loc.includes('centro') || loc.includes('df') || loc.includes('toluca')) {
-      code = 'CDMX';
-    } else if (loc.includes('monterrey') || loc.includes('león') || loc.includes('nl') || loc.includes('norte')) {
-      code = 'Monterrey';
-    } else if (loc.includes('guadalajara') || loc.includes('jalisco') || loc.includes('gdl') || loc.includes('pacifico')) {
-      code = 'Guadalajara';
-    } else if (loc.includes('tijuana') || loc.includes('baja') || loc.includes('tij')) {
-      code = 'Tijuana';
-    } else if (loc.includes('cancun') || loc.includes('cancún') || loc.includes('q roo') || loc.includes('roo')) {
-      code = 'Cancun';
-    }
-    
-    if (code) {
-      mapHotspots[code].total++;
-      if (stage !== 'Cerrado Perdido') {
-        mapHotspots[code].active++;
+    filteredRecords.forEach(r => {
+      const loc = (r.cliente_ubicacion || '').toLowerCase();
+      const stage = kanbanMeta[r.id]?.stage;
+      let code: 'CDMX' | 'Monterrey' | 'Guadalajara' | 'Tijuana' | 'Cancun' | null = null;
+      
+      if (loc.includes('cdmx') || loc.includes('mexico') || loc.includes('médica') || loc.includes('centro') || loc.includes('df') || loc.includes('toluca')) {
+        code = 'CDMX';
+      } else if (loc.includes('monterrey') || loc.includes('león') || loc.includes('nl') || loc.includes('norte')) {
+        code = 'Monterrey';
+      } else if (loc.includes('guadalajara') || loc.includes('jalisco') || loc.includes('gdl') || loc.includes('pacifico')) {
+        code = 'Guadalajara';
+      } else if (loc.includes('tijuana') || loc.includes('baja') || loc.includes('tij')) {
+        code = 'Tijuana';
+      } else if (loc.includes('cancun') || loc.includes('cancún') || loc.includes('q roo') || loc.includes('roo')) {
+        code = 'Cancun';
       }
-    }
-  });
+      
+      if (code) {
+        spots[code].total++;
+        if (stage !== 'Cerrado Perdido') {
+          spots[code].active++;
+        }
+      }
+    });
+
+    return spots;
+  }, [filteredRecords, kanbanMeta]);
 
   return (
     <div className="space-y-6 fade-in pb-12" id="dashboard-tab-content">

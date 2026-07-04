@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID, getCRMSettings, updateCRMSettings, subscribeToCRMSettings } from '../supabaseService';
+import { safeJsonParse, safeRound } from '../utils/coreUtils';
 import { 
   Search, 
   Plus, 
@@ -43,6 +44,7 @@ interface LeadsSectionProps {
   contacts?: Contact[];
   role: UserRole;
   dbUsers?: UserAccount[];
+  exchangeRate: number;
   onAddRecord: (record: CRMRecord) => void;
   onUpdateRecord: (record: CRMRecord) => void;
   onDeleteRecord: (id: string) => void;
@@ -82,11 +84,295 @@ interface KanbanMeta {
   stagnation_days_limit?: number;
 }
 
+interface KanbanCardItemProps {
+  card: CRMRecord;
+  meta: KanbanMeta;
+  role: string;
+  stage: string;
+  isDragging: boolean;
+  isDraggedOver: boolean;
+  getDaysInStage: (dateEntered: string) => number;
+  handleCardDragStart: (e: React.DragEvent, id: string) => void;
+  handleCardDragEnd: () => void;
+  handleCardDragOverCard: (e: React.DragEvent, id: string, stage: string) => void;
+  handleCardDropOnCard: (e: React.DragEvent, id: string, stage: string) => void;
+  setActiveDrawerRecordId: (id: string | null) => void;
+  setPdfPromptRecord: (card: CRMRecord | null) => void;
+  setPdfPromptOpen: (open: boolean) => void;
+  getInitials: (name: string) => string;
+  getAvatarBg: (name: string | null | undefined) => string;
+}
+
+const areEqual = (prevProps: KanbanCardItemProps, nextProps: KanbanCardItemProps) => {
+  return (
+    prevProps.card.id === nextProps.card.id &&
+    prevProps.card.prioridad === nextProps.card.prioridad &&
+    prevProps.card.total_subtotal_cotizacion === nextProps.card.total_subtotal_cotizacion &&
+    prevProps.card.informacion_general_moneda === nextProps.card.informacion_general_moneda &&
+    prevProps.card.informacion_general_cliente === nextProps.card.informacion_general_cliente &&
+    prevProps.card.informacion_general_proyecto === nextProps.card.informacion_general_proyecto &&
+    prevProps.card.informacion_general_planta === nextProps.card.informacion_general_planta &&
+    prevProps.card.informacion_general_link_cotizacion === nextProps.card.informacion_general_link_cotizacion &&
+    prevProps.card.status_proyecto === nextProps.card.status_proyecto &&
+    JSON.stringify(prevProps.card.acciones_seguimiento) === JSON.stringify(nextProps.card.acciones_seguimiento) &&
+    prevProps.role === nextProps.role &&
+    prevProps.stage === nextProps.stage &&
+    prevProps.isDragging === nextProps.isDragging &&
+    prevProps.isDraggedOver === nextProps.isDraggedOver &&
+    prevProps.meta.stage === nextProps.meta.stage &&
+    prevProps.meta.dateEnteredStage === nextProps.meta.dateEnteredStage &&
+    prevProps.meta.responsable === nextProps.meta.responsable &&
+    prevProps.meta.stagnation_days_limit === nextProps.meta.stagnation_days_limit &&
+    JSON.stringify(prevProps.meta.subtasks) === JSON.stringify(nextProps.meta.subtasks) &&
+    JSON.stringify(prevProps.meta.tags) === JSON.stringify(nextProps.meta.tags)
+  );
+};
+
+const KanbanCardItem = React.memo(function KanbanCardItem({
+  card,
+  meta,
+  role,
+  stage,
+  isDragging,
+  isDraggedOver,
+  getDaysInStage,
+  handleCardDragStart,
+  handleCardDragEnd,
+  handleCardDragOverCard,
+  handleCardDropOnCard,
+  setActiveDrawerRecordId,
+  setPdfPromptRecord,
+  setPdfPromptOpen,
+  getInitials,
+  getAvatarBg
+}: KanbanCardItemProps) {
+  const days = getDaysInStage(meta.dateEnteredStage);
+  
+  // semaphore class
+  const getDaysSemaphore = (st: string, d: number) => {
+    const thresh = STAGE_THRESHOLDS[st] || { warn: 5, critical: 10 };
+    if (d >= thresh.critical) {
+      return 'bg-red-50 text-red-700 border-red-200';
+    } else if (d >= thresh.warn) {
+      return 'bg-amber-50 text-amber-700 border-amber-200';
+    } else {
+      return 'bg-green-50 text-green-700 border-green-200';
+    }
+  };
+  const semClass = getDaysSemaphore(stage, days);
+
+  // next follow up overdue alert check
+  const checkFollowupOverdue = () => {
+    if (!card.acciones_seguimiento || card.acciones_seguimiento.length === 0) return false;
+    const lastFollow = card.acciones_seguimiento[card.acciones_seguimiento.length - 1];
+    if (!lastFollow.fecha) return false;
+    const fDate = new Date(lastFollow.fecha);
+    const tDate = new Date('2026-06-14'); // Today metadata
+    return fDate < tDate;
+  };
+  const overdue = checkFollowupOverdue();
+
+  const stagLimit = meta.stagnation_days_limit || 5;
+  const isStalled = days >= stagLimit;
+
+  // Last interaction notes
+  const lastInteraction = card.acciones_seguimiento && card.acciones_seguimiento.length > 0
+    ? card.acciones_seguimiento[card.acciones_seguimiento.length - 1]
+    : null;
+
+  // Checklist stats
+  const completedCount = meta.subtasks ? meta.subtasks.filter((s: any) => s.completed).length : 0;
+  const hasSubtasks = meta.subtasks && meta.subtasks.length > 0;
+  const totalCount = meta.subtasks ? meta.subtasks.length : 0;
+  const allCompleted = hasSubtasks && completedCount === totalCount;
+
+  // Level left color-code bar
+  const getTemperatureLeftBar = (temp: string | null | undefined) => {
+    switch (temp) {
+      case 'Hot': return 'border-l-red-500';
+      case 'Warm': return 'border-l-amber-500';
+      case 'Cool': return 'border-l-sky-500';
+      case 'Win': return 'border-l-emerald-500';
+      default: return 'border-l-slate-400';
+    }
+  };
+
+  const renderTemperaturePill = (status: string | null | undefined) => {
+    switch (status) {
+      case 'Hot':
+        return (
+          <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
+            <span>🔥</span> HOT
+          </span>
+        );
+      case 'Warm':
+        return (
+          <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">
+            <span>⚡</span> WARM
+          </span>
+        );
+      case 'Cool':
+        return (
+          <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200">
+            <span>❄️</span> COOL
+          </span>
+        );
+      case 'Win':
+        return (
+          <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+            <span>🏆</span> WIN
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+            <span>❓</span> S/D
+          </span>
+        );
+    }
+  };
+
+  return (
+    <div
+      draggable={role !== 'Solo Lectura'}
+      onDragStart={(e) => handleCardDragStart(e, card.id)}
+      onDragEnd={handleCardDragEnd}
+      onDragOver={(e) => handleCardDragOverCard(e, card.id, stage)}
+      onDrop={(e) => handleCardDropOnCard(e, card.id, stage)}
+      onClick={() => {
+        setActiveDrawerRecordId(card.id);
+      }}
+      className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-3 ${
+        isDragging ? 'opacity-40 scale-[0.98]' : ''
+      } ${
+        isDraggedOver ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/10 scale-[1.01]' : ''
+      }`}
+    >
+      {/* ZONA 1: Identidad & Prioridad */}
+      <div className="flex items-start justify-between gap-1.5">
+        <div>
+          <h5 className="text-[12px] font-bold text-slate-900 leading-snug line-clamp-1">
+            {card.informacion_general_cliente || 'Cliente sin asignar'}
+          </h5>
+          <span className="text-[10px] text-slate-400 font-mono font-bold mt-0.5 inline-block" title="Folio del proyecto">
+            #{card.informacion_general_folio || 'S/F'}
+          </span>
+        </div>
+        <div className="shrink-0">
+          {renderTemperaturePill(card.status_proyecto)}
+        </div>
+      </div>
+
+      {/* ZONA 2: Núcleo del Proyecto */}
+      <div className="space-y-1">
+        <h6 className="text-[11.5px] font-medium text-slate-700 leading-snug line-clamp-2">
+          {card.informacion_general_proyecto || <span className="italic text-slate-400">Sin descripción de proyecto</span>}
+        </h6>
+        <p className="text-[10px] text-slate-500 flex items-center gap-1">
+          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+          <span className="truncate">{card.informacion_general_planta || 'Planta sin asignar'}</span>
+        </p>
+      </div>
+
+      {/* ZONA 3: Valor & Último Contacto */}
+      <div className="space-y-2">
+        {/* Valor (Subtotal) */}
+        <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 flex items-center justify-between">
+          <span className="text-[10px] text-slate-500 font-medium">Subtotal:</span>
+          <span className="text-xs font-extrabold text-slate-800">
+            ${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {card.informacion_general_moneda || 'USD'}
+          </span>
+        </div>
+        
+        {/* Último Contacto */}
+        {lastInteraction ? (
+          <div className="flex items-start gap-1 text-[10px] text-slate-500 italic bg-slate-50/70 border border-slate-100/70 rounded-lg p-2 leading-relaxed">
+            <MessageSquare className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+            <span className="line-clamp-2">{lastInteraction.notas}</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1 text-[10px] text-slate-400 italic bg-slate-50/30 border border-dashed border-slate-150 rounded-lg p-2">
+            <MessageSquare className="w-3 h-3 shrink-0 text-slate-300" />
+            <span>Sin interacciones registradas</span>
+          </div>
+        )}
+      </div>
+
+      {/* ZONA 4: Operaciones & Indicadores */}
+      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Checklist Progress */}
+          {hasSubtasks && (
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex items-center gap-1 ${
+              allCompleted 
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            }`}>
+              <CheckSquare className="w-3 h-3" />
+              <span>{completedCount}/{totalCount}</span>
+            </span>
+          )}
+
+          {/* Stagnation Badge / Alert */}
+          {isStalled ? (
+            <span className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-md animate-pulse" title={`Días en etapa supera límite de ${stagLimit} días`}>
+              <Clock className="w-3 h-3 text-red-600 shrink-0" />
+              <span>⚠️ Estancado {days}d</span>
+            </span>
+          ) : (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
+              <Clock className="w-3 h-3" />
+              <span>{days}d</span>
+            </span>
+          )}
+
+          {/* Overdue alert indicator */}
+          {overdue && (
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" title="Seguimiento atrasado" />
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {/* Fast access PDF (Drive) and link shortcut - ALWAYS visible to prevent data/access loss */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim().startsWith('http')) {
+                window.open(card.informacion_general_link_cotizacion.trim(), '_blank');
+              } else {
+                setPdfPromptRecord(card);
+                setPdfPromptOpen(true);
+              }
+            }}
+            title={card.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización"}
+            className={`p-1 border rounded-lg transition-all flex items-center justify-center cursor-pointer ${
+              card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim()
+                ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 active:scale-95'
+                : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 active:scale-95'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
+          </button>
+
+          {/* Assigned Responsible Avatar */}
+          <div 
+            className={`w-6 h-6 rounded-full ${getAvatarBg(meta.responsable)} text-[10px] font-medium flex items-center justify-center shrink-0 shadow-3xs border border-white`}
+            title={`Responsable: ${meta.responsable}`}
+          >
+            {getInitials(meta.responsable)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}, areEqual);
+
 export default function LeadsSection({
   records,
   contacts = [],
   role,
   dbUsers = [],
+  exchangeRate,
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -105,7 +391,16 @@ export default function LeadsSection({
     : ["Geovanni Andrade"];
 
   // Filtering & Search states
+  const [localSearchTerm, setLocalSearchTerm] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setSearchTerm(localSearchTerm);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [localSearchTerm]);
 
   // Kanban and View modes states (Kanban initially active as default)
   const [viewMode, setViewMode] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'portfolio'>('kanban');
@@ -463,29 +758,23 @@ export default function LeadsSection({
         // Parse checklist_tasks from DB
         let dbSubtasks: any[] | null = null;
         if (r.checklist_tasks) {
-          try {
-            const parsed = JSON.parse(r.checklist_tasks);
-            if (Array.isArray(parsed)) {
-              dbSubtasks = parsed.map((item: any, sidx: number) => ({
-                id: item.id || `s-db-${idx}-${sidx}-${Date.now()}`,
-                text: String(item.text || ''),
-                completed: !!item.completed
-              }));
-            }
-          } catch (e) {
-            // Fallback if not valid JSON
+          const parsed = safeJsonParse<any[] | null>(r.checklist_tasks, null, 'checklist_tasks');
+          if (Array.isArray(parsed)) {
+            dbSubtasks = parsed.map((item: any, sidx: number) => ({
+              id: item.id || `s-db-${idx}-${sidx}-${Date.now()}`,
+              text: String(item.text || ''),
+              completed: !!item.completed
+            }));
           }
         }
 
         // Parse tags from DB
         let dbTags: string[] | null = null;
         if (r.tags) {
-          try {
-            const parsed = JSON.parse(r.tags);
-            if (Array.isArray(parsed)) {
-              dbTags = parsed.map(String);
-            }
-          } catch (e) {
+          const parsed = safeJsonParse<any[] | null>(r.tags, null, 'tags');
+          if (Array.isArray(parsed)) {
+            dbTags = parsed.map(String);
+          } else {
             dbTags = String(r.tags).split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
           }
         }
@@ -850,7 +1139,7 @@ export default function LeadsSection({
   const getAmountGroup = (r: CRMRecord) => {
     let valueUSD = r.total_general_cotizacion;
     if (r.informacion_general_moneda === 'MXN') {
-      valueUSD = r.total_general_cotizacion / 17.05; // Standard B2B Exchange Rate from App.tsx
+      valueUSD = r.total_general_cotizacion / exchangeRate; // Dynamic B2B Exchange Rate from App.tsx
     }
     if (valueUSD < 15000) return 'low';
     if (valueUSD >= 15000 && valueUSD <= 50000) return 'medium';
@@ -858,115 +1147,126 @@ export default function LeadsSection({
   };
 
   // Extract unique filter lists
-  const uniqueClients = Array.from(new Set(records.map((r) => r.informacion_general_cliente).filter((c): c is string => !!c)));
-  const uniquePlants = Array.from(new Set(records.map((r) => r.informacion_general_planta).filter((p): p is string => !!p)));
+  const uniqueClients = useMemo(() => {
+    return Array.from(new Set(records.map((r) => r.informacion_general_cliente).filter((c): c is string => !!c)));
+  }, [records]);
+
+  const uniquePlants = useMemo(() => {
+    return Array.from(new Set(records.map((r) => r.informacion_general_planta).filter((p): p is string => !!p)));
+  }, [records]);
 
   // Extract dynamic unique years list from records
-  const uniqueYears = Array.from(
-    new Set(
-      records
-        .map((r) => (r.fecha_registro ? r.fecha_registro.substring(0, 4) : ''))
-        .filter(Boolean)
-    )
-  ).sort();
+  const uniqueYears = useMemo(() => {
+    return Array.from(
+      new Set(
+        records
+          .map((r) => (r.fecha_registro ? r.fecha_registro.substring(0, 4) : ''))
+          .filter(Boolean)
+      )
+    ).sort();
+  }, [records]);
 
   // Base filtration matching original top-bar custom selectors
-  const baseFiltered = records.filter((r) => {
-    // 1. General search
-    const matchesSearch =
-      !searchTerm ? true : (
-        (r.informacion_general_cliente || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.informacion_general_proyecto || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.informacion_general_folio || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.informacion_general_planta || '').toLowerCase().includes(searchTerm.toLowerCase())
+  const baseFiltered = useMemo(() => {
+    return records.filter((r) => {
+      // 1. General search
+      const matchesSearch =
+        !searchTerm ? true : (
+          (r.informacion_general_cliente || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (r.informacion_general_proyecto || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (r.informacion_general_folio || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (r.informacion_general_planta || '').toLowerCase().includes(searchTerm.toLowerCase())
+        );
+
+      // 3. Tab filter (All, Activos, Cerrados)
+      let matchesTab = true;
+      if (activeTabFilter === 'active') {
+        matchesTab = r.estado_proyecto === 'Propuesta' || r.estado_proyecto === 'Negociación';
+      } else if (activeTabFilter === 'closed') {
+        matchesTab = r.estado_proyecto === 'Cerrado Ganado';
+      }
+
+      // 4. Year, Quarter, Date range
+      const recordYear = r.fecha_registro ? r.fecha_registro.substring(0, 4) : '';
+      const recordQuarter = getQuarter(r.fecha_registro);
+      
+      const matchesYear = yearFilter === 'All' || recordYear === yearFilter;
+      const matchesQuarter = quarterFilter === 'All' || recordQuarter === quarterFilter;
+
+      let matchesDateRange = true;
+      if (startDateFilter && r.fecha_registro) {
+        matchesDateRange = matchesDateRange && (r.fecha_registro >= startDateFilter);
+      }
+      if (endDateFilter && r.fecha_registro) {
+        matchesDateRange = matchesDateRange && (r.fecha_registro <= endDateFilter);
+      }
+
+      // 6. Region
+      const recordRegion = getRegionGroup(r);
+      const matchesRegion = regionFilter === 'All' || recordRegion === regionFilter;
+
+      return (
+        matchesSearch &&
+        matchesTab &&
+        matchesYear &&
+        matchesQuarter &&
+        matchesDateRange &&
+        matchesRegion
       );
-
-    // 3. Tab filter (All, Activos, Cerrados)
-    let matchesTab = true;
-    if (activeTabFilter === 'active') {
-      matchesTab = r.estado_proyecto === 'Propuesta' || r.estado_proyecto === 'Negociación';
-    } else if (activeTabFilter === 'closed') {
-      matchesTab = r.estado_proyecto === 'Cerrado Ganado';
-    }
-
-    // 4. Year, Quarter, Date range
-    const recordYear = r.fecha_registro ? r.fecha_registro.substring(0, 4) : '';
-    const recordQuarter = getQuarter(r.fecha_registro);
-    
-    const matchesYear = yearFilter === 'All' || recordYear === yearFilter;
-    const matchesQuarter = quarterFilter === 'All' || recordQuarter === quarterFilter;
-
-    let matchesDateRange = true;
-    if (startDateFilter && r.fecha_registro) {
-      matchesDateRange = matchesDateRange && (r.fecha_registro >= startDateFilter);
-    }
-    if (endDateFilter && r.fecha_registro) {
-      matchesDateRange = matchesDateRange && (r.fecha_registro <= endDateFilter);
-    }
-
-    // 6. Region
-    const recordRegion = getRegionGroup(r);
-    const matchesRegion = regionFilter === 'All' || recordRegion === regionFilter;
-
-    return (
-      matchesSearch &&
-      matchesTab &&
-      matchesYear &&
-      matchesQuarter &&
-      matchesDateRange &&
-      matchesRegion
-    );
-  });
+    });
+  }, [records, searchTerm, activeTabFilter, yearFilter, quarterFilter, startDateFilter, endDateFilter, regionFilter]);
 
   // Apply Excel dynamic column filters
-  const filteredRecords = baseFiltered.filter((r) => {
-    for (const colKey of Object.keys(colFilters)) {
-      const activeValues = colFilters[colKey];
-      if (!activeValues || activeValues.length === 0) continue;
-      
-      let val: any = null;
-      if (colKey === 'folio') val = r.informacion_general_folio;
-      else if (colKey === 'client') val = r.informacion_general_cliente;
-      else if (colKey === 'plant') val = r.informacion_general_planta;
-      else if (colKey === 'project') val = r.informacion_general_proyecto;
-      else if (colKey === 'amount') {
-        val = r.total_general_cotizacion.toLocaleString('en-US', {
-          style: 'currency',
-          currency: r.informacion_general_moneda,
-          minimumFractionDigits: 0
-        });
-      }
-      else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
-      else if (colKey === 'responsable') val = kanbanMeta[r.id]?.responsable || r.responsable;
-      else if (colKey === 'status') val = r.estado_proyecto;
-      else if (colKey === 'level') val = getTemperature(r);
-      else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
-      else if (colKey === 'actions_history') val = r.acciones_seguimiento?.length ? `${r.acciones_seguimiento.length} acciones` : null;
-      else if (colKey === 'checklist_progress') {
-        const meta = kanbanMeta[r.id];
-        let subtasks = [];
-        if (meta && meta.subtasks) {
-          subtasks = meta.subtasks;
-        } else if (r.checklist_tasks) {
-          try { subtasks = JSON.parse(r.checklist_tasks); } catch (e) {}
+  const filteredRecords = useMemo(() => {
+    return baseFiltered.filter((r) => {
+      for (const colKey of Object.keys(colFilters)) {
+        const activeValues = colFilters[colKey];
+        if (!activeValues || activeValues.length === 0) continue;
+        
+        let val: any = null;
+        if (colKey === 'folio') val = r.informacion_general_folio;
+        else if (colKey === 'client') val = r.informacion_general_cliente;
+        else if (colKey === 'plant') val = r.informacion_general_planta;
+        else if (colKey === 'project') val = r.informacion_general_proyecto;
+        else if (colKey === 'amount') {
+          val = r.total_general_cotizacion.toLocaleString('en-US', {
+            style: 'currency',
+            currency: r.informacion_general_moneda,
+            minimumFractionDigits: 0
+          });
         }
-        const completed = subtasks.filter((s: any) => s.completed).length;
-        val = subtasks.length > 0 ? `${completed}/${subtasks.length} tareas` : null;
-      }
+        else if (colKey === 'stage') val = kanbanMeta[r.id]?.stage || resolveStageName('Nuevo');
+        else if (colKey === 'responsable') val = kanbanMeta[r.id]?.responsable || r.responsable;
+        else if (colKey === 'status') val = r.estado_proyecto;
+        else if (colKey === 'level') val = getTemperature(r);
+        else if (colKey === 'actions_followup') val = r.acciones_seguimiento?.[0]?.notas;
+        else if (colKey === 'actions_history') val = r.acciones_seguimiento?.length ? `${r.acciones_seguimiento.length} acciones` : null;
+        else if (colKey === 'checklist_progress') {
+          const meta = kanbanMeta[r.id];
+          let subtasks = [];
+          if (meta && meta.subtasks) {
+            subtasks = meta.subtasks;
+          } else if (r.checklist_tasks) {
+            subtasks = safeJsonParse<any[]>(r.checklist_tasks, [], 'checklist_tasks');
+          }
+          const completed = subtasks.filter((s: any) => s.completed).length;
+          val = subtasks.length > 0 ? `${completed}/${subtasks.length} tareas` : null;
+        }
 
-      let labelToCheck = '';
-      if (val === null || val === undefined || String(val).trim() === '') {
-        labelToCheck = 'null y campos faltantes';
-      } else {
-        labelToCheck = String(val).trim();
-      }
+        let labelToCheck = '';
+        if (val === null || val === undefined || String(val).trim() === '') {
+          labelToCheck = 'null y campos faltantes';
+        } else {
+          labelToCheck = String(val).trim();
+        }
 
-      if (!activeValues.includes(labelToCheck)) {
-        return false;
+        if (!activeValues.includes(labelToCheck)) {
+          return false;
+        }
       }
-    }
-    return true;
-  });
+      return true;
+    });
+  }, [baseFiltered, colFilters, kanbanMeta]);
 
   // Unique column values based on full pool of records
   const getUniqueColumnValues = (colKey: string) => {
@@ -995,7 +1295,7 @@ export default function LeadsSection({
         if (meta && meta.subtasks) {
           subtasks = meta.subtasks;
         } else if (r.checklist_tasks) {
-          try { subtasks = JSON.parse(r.checklist_tasks); } catch (e) {}
+          subtasks = safeJsonParse<any[]>(r.checklist_tasks, [], 'checklist_tasks');
         }
         const completed = subtasks.filter((s: any) => s.completed).length;
         val = subtasks.length > 0 ? `${completed}/${subtasks.length} tareas` : null;
@@ -1096,111 +1396,123 @@ export default function LeadsSection({
   };
 
   // Excel-like Sorting logic
-  const sortedRecords = [...filteredRecords].sort((a, b) => {
-    if (!sortColumn) return 0;
-    
-    let valA: any = '';
-    let valB: any = '';
-    
-    if (sortColumn === 'folio') {
-      valA = a.informacion_general_folio || '';
-      valB = b.informacion_general_folio || '';
-    } else if (sortColumn === 'client') {
-      valA = a.informacion_general_cliente || '';
-      valB = b.informacion_general_cliente || '';
-    } else if (sortColumn === 'plant') {
-      valA = a.informacion_general_planta || '';
-      valB = b.informacion_general_planta || '';
-    } else if (sortColumn === 'project') {
-      valA = a.informacion_general_proyecto || '';
-      valB = b.informacion_general_proyecto || '';
-    } else if (sortColumn === 'amount') {
-      const getUSD = (rec: CRMRecord) => {
-        let val = rec.total_general_cotizacion;
-        if (rec.informacion_general_moneda === 'MXN') {
-          val = rec.total_general_cotizacion / 17.05;
-        }
-        return val;
-      };
-      valA = getUSD(a);
-      valB = getUSD(b);
-    } else if (sortColumn === 'status') {
-      valA = a.estado_proyecto || '';
-      valB = b.estado_proyecto || '';
-    } else if (sortColumn === 'stage') {
-      valA = kanbanMeta[a.id]?.stage || resolveStageName('Nuevo');
-      valB = kanbanMeta[b.id]?.stage || resolveStageName('Nuevo');
-    } else if (sortColumn === 'responsable') {
-      valA = kanbanMeta[a.id]?.responsable || a.responsable || '';
-      valB = kanbanMeta[b.id]?.responsable || b.responsable || '';
-    } else if (sortColumn === 'level') {
-      const getPriorityValue = (temp: string) => {
-        if (temp === 'Win') return 4;
-        if (temp === 'Hot') return 3;
-        if (temp === 'Warm') return 2;
-        return 1;
-      };
-      valA = getPriorityValue(getTemperature(a));
-      valB = getPriorityValue(getTemperature(b));
-    } else if (sortColumn === 'actions_followup') {
-      valA = a.acciones_seguimiento?.[0]?.notas || '';
-      valB = b.acciones_seguimiento?.[0]?.notas || '';
-    } else if (sortColumn === 'actions_history') {
-      valA = a.acciones_seguimiento?.length || 0;
-      valB = b.acciones_seguimiento?.length || 0;
-    } else if (sortColumn === 'checklist_progress') {
-      const getPct = (rec: CRMRecord) => {
-        const meta = kanbanMeta[rec.id];
-        let subtasks = [];
-        if (meta && meta.subtasks) {
-          subtasks = meta.subtasks;
-        } else if (rec.checklist_tasks) {
-          try { subtasks = JSON.parse(rec.checklist_tasks); } catch (e) {}
-        }
-        const total = subtasks.length;
-        if (total === 0) return 0;
-        const completed = subtasks.filter((s: any) => s.completed).length;
-        return completed / total;
-      };
-      valA = getPct(a);
-      valB = getPct(b);
-    }
+  const sortedRecords = useMemo(() => {
+    return [...filteredRecords].sort((a, b) => {
+      if (!sortColumn) return 0;
+      
+      let valA: any = '';
+      let valB: any = '';
+      
+      if (sortColumn === 'folio') {
+        valA = a.informacion_general_folio || '';
+        valB = b.informacion_general_folio || '';
+      } else if (sortColumn === 'client') {
+        valA = a.informacion_general_cliente || '';
+        valB = b.informacion_general_cliente || '';
+      } else if (sortColumn === 'plant') {
+        valA = a.informacion_general_planta || '';
+        valB = b.informacion_general_planta || '';
+      } else if (sortColumn === 'project') {
+        valA = a.informacion_general_proyecto || '';
+        valB = b.informacion_general_proyecto || '';
+      } else if (sortColumn === 'amount') {
+        const getUSD = (rec: CRMRecord) => {
+          let val = rec.total_general_cotizacion;
+          if (rec.informacion_general_moneda === 'MXN') {
+            val = rec.total_general_cotizacion / exchangeRate;
+          }
+          return val;
+        };
+        valA = getUSD(a);
+        valB = getUSD(b);
+      } else if (sortColumn === 'status') {
+        valA = a.estado_proyecto || '';
+        valB = b.estado_proyecto || '';
+      } else if (sortColumn === 'stage') {
+        valA = kanbanMeta[a.id]?.stage || resolveStageName('Nuevo');
+        valB = kanbanMeta[b.id]?.stage || resolveStageName('Nuevo');
+      } else if (sortColumn === 'responsable') {
+        valA = kanbanMeta[a.id]?.responsable || a.responsable || '';
+        valB = kanbanMeta[b.id]?.responsable || b.responsable || '';
+      } else if (sortColumn === 'level') {
+        const getPriorityValue = (temp: string) => {
+          if (temp === 'Win') return 4;
+          if (temp === 'Hot') return 3;
+          if (temp === 'Warm') return 2;
+          return 1;
+        };
+        valA = getPriorityValue(getTemperature(a));
+        valB = getPriorityValue(getTemperature(b));
+      } else if (sortColumn === 'actions_followup') {
+        valA = a.acciones_seguimiento?.[0]?.notas || '';
+        valB = b.acciones_seguimiento?.[0]?.notas || '';
+      } else if (sortColumn === 'actions_history') {
+        valA = a.acciones_seguimiento?.length || 0;
+        valB = b.acciones_seguimiento?.length || 0;
+      } else if (sortColumn === 'checklist_progress') {
+        const getPct = (rec: CRMRecord) => {
+          const meta = kanbanMeta[rec.id];
+          let subtasks = [];
+          if (meta && meta.subtasks) {
+            subtasks = meta.subtasks;
+          } else if (rec.checklist_tasks) {
+            subtasks = safeJsonParse<any[]>(rec.checklist_tasks, [], 'checklist_tasks');
+          }
+          const total = subtasks.length;
+          if (total === 0) return 0;
+          const completed = subtasks.filter((s: any) => s.completed).length;
+          return completed / total;
+        };
+        valA = getPct(a);
+        valB = getPct(b);
+      }
 
-    if (typeof valA === 'string') {
-      return sortDirection === 'asc' 
-        ? valA.localeCompare(valB) 
-        : valB.localeCompare(valA);
-    } else {
-      return sortDirection === 'asc'
-        ? (valA > valB ? 1 : valA < valB ? -1 : 0)
-        : (valB > valA ? 1 : valB < valA ? -1 : 0);
-    }
-  });
+      if (typeof valA === 'string') {
+        return sortDirection === 'asc' 
+          ? valA.localeCompare(valB) 
+          : valB.localeCompare(valA);
+      } else {
+        return sortDirection === 'asc'
+          ? (valA > valB ? 1 : valA < valB ? -1 : 0)
+          : (valB > valA ? 1 : valB < valA ? -1 : 0);
+      }
+    });
+  }, [filteredRecords, sortColumn, sortDirection, kanbanMeta]);
 
-  const paginatedRecords = pageSize === 'Todos'
-    ? sortedRecords
-    : sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedRecords = useMemo(() => {
+    return pageSize === 'Todos'
+      ? sortedRecords
+      : sortedRecords.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [sortedRecords, pageSize, currentPage]);
 
   // Calculate dynamic summary stats for search matching
-  const totalCotizacionesUSD = filteredRecords.reduce((acc, r) => {
-    let val = r.total_general_cotizacion;
-    if (r.informacion_general_moneda === 'MXN') {
-      val = r.total_general_cotizacion / 17.05;
-    }
-    return acc + val;
-  }, 0);
-
-  const totalActivoUSD = filteredRecords
-    .filter((r) => r.estado_proyecto !== 'Cerrado Ganado')
-    .reduce((acc, r) => {
+  const totalCotizacionesUSD = useMemo(() => {
+    const sum = filteredRecords.reduce((acc, r) => {
       let val = r.total_general_cotizacion;
       if (r.informacion_general_moneda === 'MXN') {
-        val = r.total_general_cotizacion / 17.05;
+        val = r.total_general_cotizacion / exchangeRate;
       }
       return acc + val;
     }, 0);
+    return safeRound(sum);
+  }, [filteredRecords, exchangeRate]);
 
-  const averageQuotaUSD = filteredRecords.length > 0 ? (totalCotizacionesUSD / filteredRecords.length) : 0;
+  const totalActivoUSD = useMemo(() => {
+    const sum = filteredRecords
+      .filter((r) => r.estado_proyecto !== 'Cerrado Ganado')
+      .reduce((acc, r) => {
+        let val = r.total_general_cotizacion;
+        if (r.informacion_general_moneda === 'MXN') {
+          val = r.total_general_cotizacion / exchangeRate;
+        }
+        return acc + val;
+      }, 0);
+    return safeRound(sum);
+  }, [filteredRecords, exchangeRate]);
+
+  const averageQuotaUSD = useMemo(() => {
+    return filteredRecords.length > 0 ? safeRound(totalCotizacionesUSD / filteredRecords.length) : 0;
+  }, [filteredRecords, totalCotizacionesUSD]);
 
   // helper to lock precise column widths across headers & row metrics
   const getColWidthClass = (colKey: string) => {
@@ -1800,9 +2112,9 @@ export default function LeadsSection({
     setKanbanMeta(updatedMeta);
   };
 
-  const renderKanbanView = () => {
-    // Generate filtered records per stage
-    const columnsWithCards = kanbanColumns.map(stage => {
+  // Generate filtered records per stage (Memoized Kanban Columns Engine)
+  const columnsWithCards = useMemo(() => {
+    return kanbanColumns.map(stage => {
       // Find cards mapped to this column
       let cards = records.filter(r => {
         const meta = kanbanMeta[r.id];
@@ -1891,6 +2203,9 @@ export default function LeadsSection({
         avgDays
       };
     });
+  }, [kanbanColumns, records, kanbanMeta, searchTerm, kanbanFilterResponsable, kanbanFilterTemperature, kanbanFilterClient, kanbanMiKanbanOnly, columnSorting, wipLimits]);
+
+  const renderKanbanView = () => {
 
     const uniqueClientsList = Array.from(new Set(records.map(r => r.informacion_general_cliente).filter(Boolean))) as string[];
 
@@ -1946,12 +2261,13 @@ export default function LeadsSection({
             </div>
 
             {/* Clear Filters Button */}
-            {(kanbanFilterResponsable !== 'All' || kanbanFilterTemperature !== 'All' || kanbanFilterClient !== 'All' || searchTerm !== '') && (
+            {(kanbanFilterResponsable !== 'All' || kanbanFilterTemperature !== 'All' || kanbanFilterClient !== 'All' || localSearchTerm !== '') && (
               <button
                 onClick={() => {
                   setKanbanFilterResponsable('All');
                   setKanbanFilterTemperature('All');
                   setKanbanFilterClient('All');
+                  setLocalSearchTerm('');
                   setSearchTerm('');
                 }}
                 className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg border border-red-200 self-end mt-4 h-8 transition-all"
@@ -2241,11 +2557,7 @@ export default function LeadsSection({
                   </div>
                 )}
 
-                {/* VISUAL RULERS */}
-                <div className="h-px bg-slate-200 mt-2.5 mb-3"></div>
-
-                {/* LIST OF CARDS */}
-                <div className="space-y-2.5 overflow-y-auto flex-1 pr-0.5 select-text">
+                         <div className="space-y-2.5 overflow-y-auto flex-1 pr-0.5 select-text">
                   {cards.length === 0 ? (
                     <div className="h-28 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-3 text-center text-slate-400">
                       <span className="text-[10px] font-medium font-mono uppercase tracking-wider">Vacío / Sin leads</span>
@@ -2260,226 +2572,26 @@ export default function LeadsSection({
                         subtasks: Array.isArray(card.__tareas) ? card.__tareas : [],
                         tags: []
                       };
-                      
-                      const days = getDaysInStage(meta.dateEnteredStage);
-                      
-                      // semaphore class
-                      const getDaysSemaphore = (st: string, d: number) => {
-                        const thresh = STAGE_THRESHOLDS[st] || { warn: 5, critical: 10 };
-                        if (d >= thresh.critical) {
-                          return 'bg-red-50 text-red-700 border-red-200';
-                        } else if (d >= thresh.warn) {
-                          return 'bg-amber-50 text-amber-700 border-amber-200';
-                        } else {
-                          return 'bg-green-50 text-green-700 border-green-200';
-                        }
-                      };
-                      const semClass = getDaysSemaphore(stage, days);
-
-                      // next follow up overdue alert check
-                      const checkFollowupOverdue = () => {
-                        if (!card.acciones_seguimiento || card.acciones_seguimiento.length === 0) return false;
-                        const lastFollow = card.acciones_seguimiento[card.acciones_seguimiento.length - 1];
-                        if (!lastFollow.fecha) return false;
-                        const fDate = new Date(lastFollow.fecha);
-                        const tDate = new Date('2026-06-14'); // Today metadata
-                        return fDate < tDate;
-                      };
-                      const overdue = checkFollowupOverdue();
-
-                      const stagLimit = meta.stagnation_days_limit || 5;
-                      const isStalled = days >= stagLimit;
-
-                      // Last interaction notes
-                      const lastInteraction = card.acciones_seguimiento && card.acciones_seguimiento.length > 0
-                        ? card.acciones_seguimiento[card.acciones_seguimiento.length - 1]
-                        : null;
-
-                      // Checklist stats
-                      const completedCount = meta.subtasks.filter(s => s.completed).length;
-                      const hasSubtasks = meta.subtasks.length > 0;
-                      const totalCount = meta.subtasks.length;
-                      const allCompleted = hasSubtasks && completedCount === totalCount;
-
-                      // Level left color-code bar
-                      const getTemperatureLeftBar = (temp: string | null | undefined) => {
-                        switch (temp) {
-                          case 'Hot': return 'border-l-red-500';
-                          case 'Warm': return 'border-l-amber-500';
-                          case 'Cool': return 'border-l-sky-500';
-                          case 'Win': return 'border-l-emerald-500';
-                          default: return 'border-l-slate-400';
-                        }
-                      };
-
-                      const renderTemperaturePill = (status: string | null | undefined) => {
-                        switch (status) {
-                          case 'Hot':
-                            return (
-                              <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
-                                <span>🔥</span> HOT
-                              </span>
-                            );
-                          case 'Warm':
-                            return (
-                              <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">
-                                <span>⚡</span> WARM
-                              </span>
-                            );
-                          case 'Cool':
-                            return (
-                              <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200">
-                                <span>❄️</span> COOL
-                              </span>
-                            );
-                          case 'Win':
-                            return (
-                              <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-                                <span>🏆</span> WIN
-                              </span>
-                            );
-                          default:
-                            return (
-                              <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
-                                <span>❓</span> S/D
-                              </span>
-                            );
-                        }
-                      };
-
                       return (
-                        <div
+                        <KanbanCardItem
                           key={card.id}
-                          draggable={role !== 'Solo Lectura'}
-                          onDragStart={(e) => handleCardDragStart(e, card.id)}
-                          onDragEnd={handleCardDragEnd}
-                          onDragOver={(e) => handleCardDragOverCard(e, card.id, stage)}
-                          onDrop={(e) => handleCardDropOnCard(e, card.id, stage)}
-                          onClick={() => {
-                            setActiveDrawerRecordId(card.id);
-                          }}
-                          className={`bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs p-3.5 flex flex-col justify-between cursor-pointer transition-all border-l-4 ${getTemperatureLeftBar(card.status_proyecto)} hover:translate-y-[-1px] select-text gap-3 ${
-                            draggingCardId === card.id ? 'opacity-40 scale-[0.98]' : ''
-                          } ${
-                            draggedOverCardId === card.id ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/10 scale-[1.01]' : ''
-                          }`}
-                        >
-                          {/* ZONA 1: Identidad & Prioridad */}
-                          <div className="flex items-start justify-between gap-1.5">
-                            <div>
-                              <h5 className="text-[12px] font-bold text-slate-900 leading-snug line-clamp-1">
-                                {card.informacion_general_cliente || 'Cliente sin asignar'}
-                              </h5>
-                              <span className="text-[10px] text-slate-400 font-mono font-bold mt-0.5 inline-block" title="Folio del proyecto">
-                                #{card.informacion_general_folio || 'S/F'}
-                              </span>
-                            </div>
-                            <div className="shrink-0">
-                              {renderTemperaturePill(card.status_proyecto)}
-                            </div>
-                          </div>
-
-                          {/* ZONA 2: Núcleo del Proyecto */}
-                          <div className="space-y-1">
-                            <h6 className="text-[11.5px] font-medium text-slate-700 leading-snug line-clamp-2">
-                              {card.informacion_general_proyecto || <span className="italic text-slate-400">Sin descripción de proyecto</span>}
-                            </h6>
-                            <p className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                              <span className="truncate">{card.informacion_general_planta || 'Planta sin asignar'}</span>
-                            </p>
-                          </div>
-
-                          {/* ZONA 3: Valor & Último Contacto */}
-                          <div className="space-y-2">
-                            {/* Valor (Subtotal) */}
-                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 flex items-center justify-between">
-                              <span className="text-[10px] text-slate-500 font-medium">Subtotal:</span>
-                              <span className="text-xs font-extrabold text-slate-800">
-                                ${(card.total_subtotal_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {card.informacion_general_moneda || 'USD'}
-                              </span>
-                            </div>
-                            
-                            {/* Último Contacto */}
-                            {lastInteraction ? (
-                              <div className="flex items-start gap-1 text-[10px] text-slate-500 italic bg-slate-50/70 border border-slate-100/70 rounded-lg p-2 leading-relaxed">
-                                <MessageSquare className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
-                                <span className="line-clamp-2">{lastInteraction.notas}</span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1 text-[10px] text-slate-400 italic bg-slate-50/30 border border-dashed border-slate-150 rounded-lg p-2">
-                                <MessageSquare className="w-3 h-3 shrink-0 text-slate-300" />
-                                <span>Sin interacciones registradas</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* ZONA 4: Operaciones & Indicadores */}
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {/* Checklist Progress */}
-                              {hasSubtasks && (
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex items-center gap-1 ${
-                                  allCompleted 
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                                    : 'bg-slate-100 text-slate-600 border-slate-200'
-                                }`}>
-                                  <CheckSquare className="w-3 h-3" />
-                                  <span>{completedCount}/{totalCount}</span>
-                                </span>
-                              )}
-
-                              {/* Stagnation Badge / Alert */}
-                              {isStalled ? (
-                                <span className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-md animate-pulse" title={`Días en etapa supera límite de ${stagLimit} días`}>
-                                  <Clock className="w-3 h-3 text-red-600 shrink-0" />
-                                  <span>⚠️ Estancado {days}d</span>
-                                </span>
-                              ) : (
-                                <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium flex items-center gap-1 ${semClass}`}>
-                                  <Clock className="w-3 h-3" />
-                                  <span>{days}d</span>
-                                </span>
-                              )}
-
-                              {/* Overdue alert indicator */}
-                              {overdue && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" title="Seguimiento atrasado" />
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-1.5">
-                              {/* Fast access PDF (Drive) and link shortcut - ALWAYS visible to prevent data/access loss */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim().startsWith('http')) {
-                                    window.open(card.informacion_general_link_cotizacion.trim(), '_blank');
-                                  } else {
-                                    setPdfPromptRecord(card);
-                                    setPdfPromptOpen(true);
-                                  }
-                                }}
-                                title={card.informacion_general_link_cotizacion ? "Ver Cotización PDF" : "Sin Enlace de Cotización"}
-                                className={`p-1 border rounded-lg transition-all flex items-center justify-center cursor-pointer ${
-                                  card.informacion_general_link_cotizacion && card.informacion_general_link_cotizacion.trim()
-                                    ? 'border-red-200 bg-red-50 hover:bg-red-100 text-red-600 active:scale-95'
-                                    : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 active:scale-95'
-                                }`}
-                              >
-                                <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
-                              </button>
-
-                              {/* Assigned Responsible Avatar */}
-                              <div 
-                                className={`w-6 h-6 rounded-full ${getAvatarBg(meta.responsable)} text-[10px] font-medium flex items-center justify-center shrink-0 shadow-3xs border border-white`}
-                                title={`Responsable: ${meta.responsable}`}
-                              >
-                                {getInitials(meta.responsable)}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+                          card={card}
+                          meta={meta}
+                          role={role}
+                          stage={stage}
+                          isDragging={draggingCardId === card.id}
+                          isDraggedOver={draggedOverCardId === card.id}
+                          getDaysInStage={getDaysInStage}
+                          handleCardDragStart={handleCardDragStart}
+                          handleCardDragEnd={handleCardDragEnd}
+                          handleCardDragOverCard={handleCardDragOverCard}
+                          handleCardDropOnCard={handleCardDropOnCard}
+                          setActiveDrawerRecordId={setActiveDrawerRecordId}
+                          setPdfPromptRecord={setPdfPromptRecord}
+                          setPdfPromptOpen={setPdfPromptOpen}
+                          getInitials={getInitials}
+                          getAvatarBg={getAvatarBg}
+                        />
                       );
                     })
                   )}
@@ -3739,15 +3851,15 @@ export default function LeadsSection({
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                value={localSearchTerm}
+                onChange={(e) => setLocalSearchTerm(e.target.value)}
                 placeholder="Buscar por folio, cliente, planta o descripción..."
                 className="text-xs w-full bg-white border border-slate-250 py-2 pl-9 pr-8 rounded-lg hover:border-slate-350 outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-800 shadow-3xs font-medium"
               />
-              {searchTerm && (
+              {localSearchTerm && (
                 <button
                   type="button"
-                  onClick={() => setSearchTerm('')}
+                  onClick={() => setLocalSearchTerm('')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -5769,11 +5881,7 @@ function SubtasksProgressCell({
   if (meta && meta.subtasks) {
     subtasks = meta.subtasks;
   } else if (record.checklist_tasks) {
-    try {
-      subtasks = JSON.parse(record.checklist_tasks);
-    } catch (e) {
-      // ignore
-    }
+    subtasks = safeJsonParse<any[]>(record.checklist_tasks, [], 'checklist_tasks');
   }
 
   const total = subtasks.length;

@@ -20,7 +20,10 @@ import {
   toValidUUID,
   pushPurchaseOrderToSupabase,
   getSupabaseClient,
-  subscribeToCRMRecords
+  subscribeToCRMRecords,
+  getCRMSettings,
+  subscribeToCRMSettings,
+  syncDailyExchangeRate
 } from './supabaseService';
 
 // Subcomponents
@@ -362,7 +365,63 @@ export default function App() {
   }, [toast.show]);
 
   // Sync state helpers
-  const exchangeRate = 17.05; // Standard B2B Exchange Rate
+  const [exchangeRate, setExchangeRate] = useState<number>(17.05);
+
+  // Load exchange rate from crm_settings and subscribe to real-time updates
+  useEffect(() => {
+    let active = true;
+    let subscription: any = null;
+
+    const loadSettings = async () => {
+      const url = localStorage.getItem('verse_supabase_url') || '';
+      const key = localStorage.getItem('verse_supabase_key') || '';
+      if (!url || !key) return;
+
+      try {
+        // Sincronizar y obtener el tipo de cambio del día (actualización diaria automática)
+        const activeRate = await syncDailyExchangeRate(url, key);
+        if (active) {
+          setExchangeRate(activeRate);
+        }
+      } catch (err) {
+        console.warn('Error syncing daily exchange rate in App.tsx:', err);
+        // Fallback: obtener la configuración existente de Supabase
+        try {
+          const settings = await getCRMSettings(url, key);
+          if (active && settings && (settings as any).exchange_rate_usd_mxn) {
+            setExchangeRate(Number((settings as any).exchange_rate_usd_mxn));
+          }
+        } catch (fetchErr) {
+          console.warn('Error fetching fallback exchange rate:', fetchErr);
+        }
+      }
+    };
+
+    loadSettings();
+
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    if (url && key) {
+      try {
+        subscription = subscribeToCRMSettings((payload) => {
+          if (payload.new && (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT')) {
+            if (active && payload.new.exchange_rate_usd_mxn) {
+              setExchangeRate(Number(payload.new.exchange_rate_usd_mxn));
+            }
+          }
+        }, url, key);
+      } catch (err) {
+        console.warn('Error subscribing to crm_settings in App.tsx:', err);
+      }
+    }
+
+    return () => {
+      active = false;
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, []);
 
   // Startup mount automatic check & load from Supabase Cloud
   useEffect(() => {
@@ -1351,6 +1410,7 @@ export default function App() {
                 contacts={contacts}
                 role={role}
                 dbUsers={dbUsers}
+                exchangeRate={exchangeRate}
                 onAddRecord={(nRecord) => {
                   setRecords((prev) => [nRecord, ...prev]);
                   syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');

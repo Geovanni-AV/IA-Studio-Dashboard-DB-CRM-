@@ -124,7 +124,7 @@ export default function QuotationsSection({ records, exchangeRate, onShowAudit }
               </div>
               <div className="bg-slate-100 p-1 rounded-md text-[10px] flex items-center gap-1 text-slate-600 font-semibold uppercase">
                 <ArrowRightLeft className="w-3.5 h-3.5 text-[#000000]" />
-                Tipo de Cambio: 1 USD = 17.05 MXN
+                Tipo de Cambio: 1 USD = {exchangeRate} MXN
               </div>
             </div>
 
