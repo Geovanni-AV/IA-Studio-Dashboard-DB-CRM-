@@ -19,7 +19,8 @@ import {
   initializeDefaultUsers,
   toValidUUID,
   pushPurchaseOrderToSupabase,
-  getSupabaseClient
+  getSupabaseClient,
+  subscribeToCRMRecords
 } from './supabaseService';
 
 // Subcomponents
@@ -512,6 +513,49 @@ export default function App() {
       fetchGoogleProfile(googleToken, idToken);
     }
   }, [googleToken, googleUser]);
+
+  // --- SINCRONIZACIÓN DE LEADS/TARJETAS EN TIEMPO REAL ---
+  useEffect(() => {
+    if (supabaseStatus !== 'CONNECTED') return;
+
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    if (!url || !key) return;
+
+    const subscription = subscribeToCRMRecords(url, key, (payload) => {
+      setRecords((prevRecords) => {
+        // CASO A: Alguien agregó un nuevo proyecto
+        if (payload.eventType === 'INSERT') {
+          if (prevRecords.some(r => r.id === payload.new.id)) {
+            return prevRecords;
+          }
+          return [payload.new, ...prevRecords];
+        }
+        
+        // CASO B: Alguien movió de columna, editó o agregó tareas a un proyecto
+        if (payload.eventType === 'UPDATE') {
+          return prevRecords.map((record) => 
+            record.id === payload.new.id ? payload.new : record
+          );
+        }
+        
+        // CASO C: Alguien eliminó un proyecto definitivamente
+        if (payload.eventType === 'DELETE') {
+          const oldId = payload.old?.id || payload.new?.id;
+          if (!oldId) return prevRecords;
+          return prevRecords.filter((record) => record.id !== oldId);
+        }
+
+        return prevRecords;
+      });
+    });
+
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [supabaseStatus]);
 
   // Save states automatically
   useEffect(() => {

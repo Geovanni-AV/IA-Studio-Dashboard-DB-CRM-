@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
-import { toValidUUID } from '../supabaseService';
+import { toValidUUID, getCRMSettings, updateCRMSettings, subscribeToCRMSettings } from '../supabaseService';
 import { 
   Search, 
   Plus, 
@@ -122,6 +122,9 @@ export default function LeadsSection({
     return {};
   });
 
+  const [settingsId, setSettingsId] = useState<string | null>(null);
+  const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
+
   const [kanbanColumns, setKanbanColumns] = useState<string[]>(() => {
     const saved = localStorage.getItem('verse_crm_kanban_columns');
     return saved ? JSON.parse(saved) : ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
@@ -156,6 +159,112 @@ export default function LeadsSection({
       'Cerrado Perdido': 99,
     };
   });
+
+  // Effect to load and subscribe to CRM settings in real-time
+  useEffect(() => {
+    let active = true;
+
+    const fetchSettings = async () => {
+      const url = localStorage.getItem('verse_supabase_url') || '';
+      const key = localStorage.getItem('verse_supabase_key') || '';
+      if (!url || !key) {
+        if (active) setIsSettingsLoaded(true);
+        return;
+      }
+
+      try {
+        const settings = await getCRMSettings(url, key);
+        if (!active) return;
+
+        if (settings) {
+          setSettingsId(settings.id);
+          setKanbanColumns(settings.kanban_columns);
+          setWipLimits(settings.wip_limits || {});
+        } else {
+          // If no settings found, seed with current/default values
+          const initialColumns = ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
+          const initialWip = {
+            'Nuevo': 5,
+            'Contactado': 4,
+            'Cotizado': 8,
+            'Negociación': 4,
+            'Cerrado Ganado': 99,
+            'Cerrado Perdido': 99,
+          };
+          const success = await updateCRMSettings({
+            kanban_columns: initialColumns,
+            wip_limits: initialWip
+          }, url, key);
+
+          if (success && active) {
+            const reSettings = await getCRMSettings(url, key);
+            if (reSettings && active) {
+              setSettingsId(reSettings.id);
+              setKanbanColumns(reSettings.kanban_columns);
+              setWipLimits(reSettings.wip_limits || {});
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching crm_settings:', err);
+      } finally {
+        if (active) setIsSettingsLoaded(true);
+      }
+    };
+
+    fetchSettings();
+
+    // Setup subscription
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    let subscription: any = null;
+
+    if (url && key) {
+      subscription = subscribeToCRMSettings((payload) => {
+        if (payload.new && (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT')) {
+          if (active) {
+            setIsSettingsLoaded(false);
+            setSettingsId(payload.new.id);
+            setKanbanColumns(payload.new.kanban_columns || []);
+            setWipLimits(payload.new.wip_limits || {});
+            setTimeout(() => {
+              if (active) setIsSettingsLoaded(true);
+            }, 100);
+          }
+        }
+      }, url, key);
+    }
+
+    return () => {
+      active = false;
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, []);
+
+  // Save changes back to Supabase
+  useEffect(() => {
+    if (!isSettingsLoaded) return;
+
+    const pushSettings = async () => {
+      const url = localStorage.getItem('verse_supabase_url') || '';
+      const key = localStorage.getItem('verse_supabase_key') || '';
+      if (!url || !key) return;
+
+      await updateCRMSettings({
+        id: settingsId || undefined,
+        kanban_columns: kanbanColumns,
+        wip_limits: wipLimits
+      }, url, key);
+    };
+
+    const timer = setTimeout(() => {
+      pushSettings();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [kanbanColumns, wipLimits, isSettingsLoaded, settingsId]);
 
   // Sorting overrides per Kanban Column
   const [columnSorting, setColumnSorting] = useState<Record<string, 'monto' | 'antiguedad' | 'responsable' | null>>({
@@ -1303,7 +1412,9 @@ export default function LeadsSection({
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
-  const getAvatarBg = (name: string) => {
+  const getAvatarBg = (name: string | null | undefined) => {
+    if (!name) return 'bg-slate-400 text-white';
+    
     const colors = [
       'bg-blue-600 text-white',
       'bg-indigo-600 text-white',
@@ -3176,14 +3287,14 @@ export default function LeadsSection({
 
     if (type === 'delete') {
       return createPortal(
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
           {/* BLUR BACKGROUND OVERLAY */}
           <div 
             className="absolute inset-0 transition-opacity cursor-pointer"
             onClick={() => setPendingDrag(null)}
           />
 
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-scale-in relative z-10">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative z-[101] animate-in fade-in zoom-in-95 duration-200 space-y-4">
             <div className="flex items-center gap-3 text-red-600">
               <div className="p-3 bg-red-50 rounded-full text-red-600 border border-red-100 shadow-[inset_0_1px_2px_rgba(239,68,68,0.1)]">
                 <Trash2 className="w-6 h-6 stroke-[2]" />
@@ -3231,22 +3342,22 @@ export default function LeadsSection({
       : ['Perdido por presupuesto', 'Perdido por competencia', 'Perdido sin respuesta', 'Perdido por tiempos', 'Otro'];
 
     return createPortal(
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 text-slate-800 animate-in fade-in duration-150">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 text-slate-800 animate-in fade-in duration-150">
         {/* BLUR BACKGROUND OVERLAY */}
         <div 
           className="absolute inset-0 transition-opacity cursor-pointer"
           onClick={() => setPendingDrag(null)}
         />
 
-        <div className="relative bg-white border border-slate-200 w-full max-w-md rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-scale-in z-10">
-          <header className="px-5 py-3.5 bg-slate-50 border-b border-slate-150 text-left">
+        <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative z-[101] animate-in fade-in zoom-in-95 duration-200 flex flex-col overflow-hidden">
+          <header className="pb-3.5 border-b border-slate-150 text-left">
             <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 uppercase font-sans tracking-wide">
               <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
               Confirmar Cierre de Proyecto ({r.informacion_general_folio})
             </h3>
           </header>
 
-          <div className="p-5 text-left space-y-4">
+          <div className="py-4 text-left space-y-4">
             <p className="text-xs text-slate-600 font-sans leading-relaxed">
               Está a punto de archivar la licitación <strong>{r.informacion_general_proyecto}</strong> de {r.informacion_general_cliente} en el estado final <strong>({targetStage})</strong>.
             </p>
@@ -3278,7 +3389,7 @@ export default function LeadsSection({
             </div>
           </div>
 
-          <footer className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+          <footer className="pt-4 border-t border-slate-200 flex justify-end gap-2">
             <button
               onClick={() => setPendingDrag(null)}
               className="px-4 py-2 bg-slate-200 hover:bg-slate-250 text-slate-700 rounded-lg text-xs font-bold transition"

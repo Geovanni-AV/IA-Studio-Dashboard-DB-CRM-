@@ -2071,6 +2071,133 @@ export async function bulkUploadToSupabase(
   }
 }
 
+// ==========================================
+// FUNCIONES DE TIEMPO REAL (WEB-SOCKETS)
+// ==========================================
+
+/**
+ * Obtiene la configuración del tablero de CRM (Columnas y Límites)
+ */
+export async function getCRMSettings(urlInput?: string, keyInput?: string): Promise<{ id: string; kanban_columns: string[]; wip_limits: Record<string, number> } | null> {
+  const url = urlInput || localStorage.getItem('verse_supabase_url') || '';
+  const key = keyInput || localStorage.getItem('verse_supabase_key') || '';
+  const client = getSupabaseClient(url, key);
+  if (!client) return null;
+
+  try {
+    const { data, error } = await client
+      .from('crm_settings')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Error al obtener crm_settings:', error);
+      return null;
+    }
+
+    return data;
+  } catch (err) {
+    console.warn('Excepción al obtener crm_settings:', err);
+    return null;
+  }
+}
+
+/**
+ * Guarda o actualiza la configuración del tablero de CRM (Columnas y Límites)
+ */
+export async function updateCRMSettings(
+  settings: { id?: string; kanban_columns: string[]; wip_limits: Record<string, number> },
+  urlInput?: string,
+  keyInput?: string
+): Promise<boolean> {
+  const url = urlInput || localStorage.getItem('verse_supabase_url') || '';
+  const key = keyInput || localStorage.getItem('verse_supabase_key') || '';
+  const client = getSupabaseClient(url, key);
+  if (!client) return false;
+
+  try {
+    let error;
+    if (settings.id) {
+      const { error: err } = await client
+        .from('crm_settings')
+        .update({
+          kanban_columns: settings.kanban_columns,
+          wip_limits: settings.wip_limits
+        })
+        .eq('id', settings.id);
+      error = err;
+    } else {
+      const { error: err } = await client
+        .from('crm_settings')
+        .upsert({
+          kanban_columns: settings.kanban_columns,
+          wip_limits: settings.wip_limits
+        });
+      error = err;
+    }
+
+    if (error) {
+      console.error('Error al guardar crm_settings:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Excepción al guardar crm_settings:', err);
+    return false;
+  }
+}
+
+/**
+ * Escucha en vivo los cambios en la configuración del tablero (Columnas y Límites)
+ */
+export const subscribeToCRMSettings = (
+  onUpdate: (payload: any) => void,
+  urlInput?: string,
+  keyInput?: string
+) => {
+  const url = urlInput || localStorage.getItem('verse_supabase_url') || '';
+  const key = keyInput || localStorage.getItem('verse_supabase_key') || '';
+  const client = getSupabaseClient(url, key);
+  if (!client) return null;
+
+  const channel = client
+    .channel('crm_settings_changes')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'crm_settings' },
+      (payload) => {
+        console.log('📡 [Realtime] Cambio detectado en crm_settings:', payload);
+        onUpdate(payload);
+      }
+    )
+    .subscribe();
+
+  return channel; // Retornamos el canal para poder cerrarlo si el usuario cambia de pantalla
+};
+
+/**
+ * Escucha en vivo los movimientos, creaciones o eliminaciones de los Leads/Proyectos
+ */
+export const subscribeToCRMRecords = (url: string, key: string, onUpdate: (payload: any) => void) => {
+  const client = getSupabaseClient(url, key);
+  if (!client) return null;
+
+  const channel = client
+    .channel('db_crm_changes')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: getResolvedCRMTableName() },
+      (payload) => {
+        console.log('📡 [Realtime] Cambio detectado en DB CRM:', payload);
+        onUpdate(payload);
+      }
+    )
+    .subscribe();
+
+  return channel;
+};
+
 export const SUPABASE_SQL_INSTRUCTIONS = `-- COPIA Y PEGA ESTE SCRIPT EN EL EDITOR SQL (SQL EDITOR) DE TU PROYECTO SUPABASE
 
 -- MIGRACIÓN DE COMPATIBILIDAD (Si ya tienes las tablas creadas, ejecuta esto primero):
@@ -2241,6 +2368,14 @@ create table if not exists usuarios (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 6. Tabla de Configuración de Tablero CRM (Columnas y Límites)
+create table if not exists crm_settings (
+  id uuid primary key default gen_random_uuid(),
+  kanban_columns text[] default array['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'],
+  wip_limits jsonb default '{}'::jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 
 -- ========================================================
 -- HABILITAR SEGURIDAD (RLS) Y CREAR POLÍTICAS PERMISIVAS
@@ -2344,4 +2479,15 @@ create policy "Permiso lectura libre" on usuarios for select using (true);
 create policy "Permiso escritura libre" on usuarios for insert with check (true);
 create policy "Permiso edicion libre" on usuarios for update using (true);
 create policy "Permiso borrado libre" on usuarios for delete using (true);
+
+-- Tabla: crm_settings
+alter table if exists crm_settings enable row level security;
+drop policy if exists "Permiso lectura libre" on crm_settings;
+drop policy if exists "Permiso escritura libre" on crm_settings;
+drop policy if exists "Permiso edicion libre" on crm_settings;
+drop policy if exists "Permiso borrado libre" on crm_settings;
+create policy "Permiso lectura libre" on crm_settings for select using (true);
+create policy "Permiso escritura libre" on crm_settings for insert with check (true);
+create policy "Permiso edicion libre" on crm_settings for update using (true);
+create policy "Permiso borrado libre" on crm_settings for delete using (true);
 `;
