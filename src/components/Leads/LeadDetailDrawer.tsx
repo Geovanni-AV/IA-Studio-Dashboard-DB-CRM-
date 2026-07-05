@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { CRMRecord, Contact, UserAccount, FollowupEntry } from '../../types';
 import { getMexicoCityDateString } from '../../dateUtils';
-import { X, Trash2, Plus, FileText, Trophy, Flame, Zap, Snowflake } from 'lucide-react';
+import { X, Trash2, Plus, FileText, Trophy, Flame, Zap, Snowflake, RefreshCw } from 'lucide-react';
 
 interface LeadDetailDrawerProps {
   isOpen: boolean;
@@ -13,10 +13,21 @@ interface LeadDetailDrawerProps {
   dbUsers: UserAccount[];
   kanbanColumns: string[];
   role: string;
+  onAddContact: (contact: Contact) => void;
+  onResetStagnation: (record: CRMRecord) => void;
 }
 
 export default function LeadDetailDrawer({ 
-  isOpen, record, onClose, onSave, contacts, dbUsers, kanbanColumns, role 
+  isOpen, 
+  record, 
+  onClose, 
+  onSave, 
+  contacts, 
+  dbUsers, 
+  kanbanColumns, 
+  role,
+  onAddContact,
+  onResetStagnation
 }: LeadDetailDrawerProps) {
   
   // Estado borrador para no mutar los datos reales hasta dar "Guardar"
@@ -24,6 +35,72 @@ export default function LeadDetailDrawer({
   const [newFollowupNotes, setNewFollowupNotes] = useState('');
   const [newFollowupMethod, setNewFollowupMethod] = useState<'Llamada Telefónica' | 'Correo Electrónico' | 'Revisión Técnica' | 'Visita a Sitio' | 'Minuta de Junta'>('Llamada Telefónica');
   const [newSubtask, setNewSubtask] = useState('');
+
+  // Estados para creación rápida de contacto
+  const [isAddingContact, setIsAddingContact] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactEmail, setNewContactEmail] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactPuesto, setNewContactPuesto] = useState('');
+  const [newContactEmpresa, setNewContactEmpresa] = useState('');
+
+  const handleResetDaysInModal = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (!draft) return;
+    if (confirm('¿Restablecer el contador de días estancados para este expediente a 0 días?')) {
+      const todayString = getMexicoCityDateString();
+      const updatedDraft = {
+        ...draft,
+        fecha_cambio_etapa: todayString
+      };
+      setDraft(updatedDraft);
+      if (onResetStagnation) {
+        onResetStagnation(updatedDraft);
+      }
+      alert("Contador de días reiniciado a 0 exitosamente en la Base de Datos.");
+    }
+  };
+
+  const handleCreateContactInModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newContactName.trim()) {
+      alert('El nombre del contacto es obligatorio.');
+      return;
+    }
+    const newContact: Contact = {
+      id: `c_${Date.now()}`,
+      nombre: newContactName.trim(),
+      email: newContactEmail.trim() || '',
+      telefono: newContactPhone.trim() || '',
+      puesto: newContactPuesto.trim() || '',
+      empresa: newContactEmpresa.trim() || '',
+      cliente: newContactEmpresa.trim() || 'General',
+      planta: '',
+      esEnlaceComercial: false
+    };
+
+    onAddContact(newContact);
+
+    // Auto-select the newly created contact
+    if (draft) {
+      setDraft({
+        ...draft,
+        contacto_nombre: newContact.nombre,
+        contacto_email: newContact.email,
+        contacto_puesto: newContact.puesto,
+        contacto_telefono: newContact.telefono,
+        contacto_asignado_id: newContact.id
+      });
+    }
+
+    // Reset form states
+    setIsAddingContact(false);
+    setNewContactName('');
+    setNewContactEmail('');
+    setNewContactPhone('');
+    setNewContactPuesto('');
+    setNewContactEmpresa('');
+  };
 
   // Inicializar el borrador cuando se abre el modal
   useEffect(() => {
@@ -404,7 +481,40 @@ export default function LeadDetailDrawer({
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5" title="Días límite antes de marcar como estancado">Alerta Estancamiento</label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase" title="Días límite antes de marcar como estancado">
+                          Alerta Estancamiento
+                        </label>
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200">
+                          <span>
+                            ⏱️ {(() => {
+                              const dateStr = draft.fecha_cambio_etapa || draft.fecha_registro;
+                              if (!dateStr) return 0;
+                              try {
+                                const today = new Date();
+                                const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                                const d1 = new Date(todayString);
+                                const d2 = new Date(dateStr.split('T')[0]);
+                                const diffTime = Math.abs(d1.getTime() - d2.getTime());
+                                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                                return diffDays >= 0 ? diffDays : 0;
+                              } catch {
+                                return 0;
+                              }
+                            })()}d
+                          </span>
+                          {role !== 'Solo Lectura' && (
+                            <button
+                              type="button"
+                              onClick={handleResetDaysInModal}
+                              className="p-0.5 text-blue-600 hover:text-blue-800 rounded hover:bg-amber-100 transition-colors cursor-pointer"
+                              title="Reiniciar estancamiento (restablecer fecha a hoy)"
+                            >
+                              <RefreshCw className="w-3 h-3 hover:rotate-45 transition-transform" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
                       <div className="relative">
                         <input 
                           type="number" 
@@ -436,59 +546,176 @@ export default function LeadDetailDrawer({
 
               {/* Contacto del Cliente */}
               <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
-                <h4 className="text-[11px] font-extrabold uppercase text-slate-500 tracking-wider mb-4">Contacto del Cliente</h4>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Asignar Contacto Existente</label>
-                    <select 
-                      value={draft.contacto_nombre || ''} 
-                      onChange={e => {
-                        const c = contacts.find(con => con.nombre === e.target.value);
-                        if (c) {
-                          setDraft({
-                            ...draft, 
-                            contacto_nombre: c.nombre, 
-                            contacto_email: c.email, 
-                            contacto_puesto: c.puesto, 
-                            contacto_telefono: c.telefono, 
-                            contacto_asignado_id: c.id
-                          });
-                        } else {
-                          setDraft({
-                            ...draft, 
-                            contacto_nombre: null, 
-                            contacto_email: null, 
-                            contacto_puesto: null, 
-                            contacto_telefono: null, 
-                            contacto_asignado_id: null
-                          });
-                        }
-                      }} 
-                      disabled={role==='Solo Lectura'} 
-                      className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-[11px] font-extrabold uppercase text-slate-500 tracking-wider">Contacto del Cliente</h4>
+                  {role !== 'Solo Lectura' && !isAddingContact && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingContact(true)}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
                     >
-                      <option value="">-- Seleccionar Contacto --</option>
-                      {contacts.map(c => <option key={c.id} value={c.nombre}>{c.nombre} ({c.puesto || 'Sin Puesto'})</option>)}
-                    </select>
-                  </div>
-                  
-                  {/* Tarjeta Visual del Contacto Asignado */}
-                  {draft.contacto_nombre ? (
-                    <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-lg space-y-1.5 shadow-sm">
-                      <p className="font-extrabold text-blue-900 text-sm flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                        {draft.contacto_nombre}
-                      </p>
-                      <p className="text-blue-700 text-xs font-medium pl-4">{draft.contacto_puesto || 'Puesto no especificado'}</p>
-                      <p className="text-blue-600 font-mono text-[11px] mt-2 pl-4">{draft.contacto_email || 'Sin correo'}</p>
-                      <p className="text-blue-600 font-mono text-[11px] pl-4">{draft.contacto_telefono || 'Sin teléfono'}</p>
-                    </div>
-                  ) : (
-                    <div className="border border-dashed border-slate-200 p-4 rounded-lg text-center text-slate-400 text-xs font-medium bg-slate-50">
-                      No hay contacto asignado a este proyecto.
-                    </div>
+                      <Plus className="w-3.5 h-3.5" /> Nuevo Contacto
+                    </button>
                   )}
                 </div>
+
+                {isAddingContact ? (
+                  <form onSubmit={handleCreateContactInModal} className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
+                      <span className="text-xs font-extrabold text-slate-800">Crear y Asociar Nuevo Contacto</span>
+                      <button 
+                        type="button" 
+                        onClick={() => setIsAddingContact(false)}
+                        className="text-slate-400 hover:text-slate-600 text-xs font-semibold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="col-span-2">
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Nombre Completo *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej. Juan Pérez"
+                          value={newContactName}
+                          onChange={e => setNewContactName(e.target.value)}
+                          className="w-full border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Correo Electrónico</label>
+                        <input
+                          type="email"
+                          placeholder="juan@correo.com"
+                          value={newContactEmail}
+                          onChange={e => setNewContactEmail(e.target.value)}
+                          className="w-full border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Teléfono</label>
+                        <input
+                          type="text"
+                          placeholder="5512345678"
+                          value={newContactPhone}
+                          onChange={e => setNewContactPhone(e.target.value)}
+                          className="w-full border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Puesto / Cargo</label>
+                        <input
+                          type="text"
+                          placeholder="Gerente de Compras"
+                          value={newContactPuesto}
+                          onChange={e => setNewContactPuesto(e.target.value)}
+                          className="w-full border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Empresa</label>
+                        <input
+                          type="text"
+                          placeholder="Nombre de la empresa"
+                          value={newContactEmpresa}
+                          onChange={e => setNewContactEmpresa(e.target.value)}
+                          className="w-full border border-slate-200 py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 rounded-lg transition-colors cursor-pointer mt-2"
+                    >
+                      Guardar y Vincular Contacto
+                    </button>
+                  </form>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Buscador Inteligente de Contactos</label>
+                      <div className="relative">
+                        <select 
+                          value={draft.contacto_nombre || ''} 
+                          onChange={e => {
+                            const c = contacts.find(con => con.nombre === e.target.value);
+                            if (c) {
+                              setDraft({
+                                ...draft, 
+                                contacto_nombre: c.nombre, 
+                                contacto_email: c.email, 
+                                contacto_puesto: c.puesto, 
+                                contacto_telefono: c.telefono, 
+                                contacto_asignado_id: c.id
+                              });
+                            } else {
+                              setDraft({
+                                ...draft, 
+                                contacto_nombre: null, 
+                                contacto_email: null, 
+                                contacto_puesto: null, 
+                                contacto_telefono: null, 
+                                contacto_asignado_id: null
+                              });
+                            }
+                          }} 
+                          disabled={role==='Solo Lectura'} 
+                          className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white cursor-pointer"
+                        >
+                          <option value="">-- Seleccionar o Vincular Contacto --</option>
+                          {contacts.map(c => (
+                            <option key={c.id} value={c.nombre}>
+                              {c.nombre} {c.puesto ? `(${c.puesto})` : ''} {c.empresa ? `- ${c.empresa}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    
+                    {/* Tarjeta Visual del Contacto Asignado */}
+                    {draft.contacto_nombre ? (
+                      <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-lg space-y-1.5 shadow-sm relative group">
+                        <p className="font-extrabold text-blue-900 text-sm flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                          {draft.contacto_nombre}
+                        </p>
+                        <p className="text-blue-700 text-xs font-medium pl-4">{draft.contacto_puesto || 'Puesto no especificado'}</p>
+                        <p className="text-blue-600 font-mono text-[11px] mt-2 pl-4">{draft.contacto_email || 'Sin correo'}</p>
+                        <p className="text-blue-600 font-mono text-[11px] pl-4">{draft.contacto_telefono || 'Sin teléfono'}</p>
+                        
+                        {role !== 'Solo Lectura' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraft({
+                                ...draft,
+                                contacto_nombre: null,
+                                contacto_email: null,
+                                contacto_puesto: null,
+                                contacto_telefono: null,
+                                contacto_asignado_id: null
+                              });
+                            }}
+                            className="absolute top-3 right-3 text-red-500 hover:text-red-700 text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer bg-white px-1.5 py-0.5 rounded border border-red-100 shadow-3xs"
+                          >
+                            Desvincular
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="border border-dashed border-slate-200 p-4 rounded-lg text-center text-slate-400 text-xs font-medium bg-slate-50">
+                        No hay contacto asignado a este proyecto.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
             </div>

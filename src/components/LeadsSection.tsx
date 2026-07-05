@@ -29,6 +29,7 @@ interface LeadsSectionProps {
   onUpdateRecord: (record: CRMRecord) => void;
   onDeleteRecord: (id: string) => void;
   onShowAudit: (action: string, details: string) => void;
+  onAddContact: (contact: Contact) => void;
 }
 
 // Stage configuration thresholds for alerts
@@ -62,7 +63,8 @@ export default function LeadsSection({
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
-  onShowAudit
+  onShowAudit,
+  onAddContact
 }: LeadsSectionProps) {
   // Active session details
   const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
@@ -480,6 +482,9 @@ export default function LeadsSection({
             newMetaState.stage = targetStage;
             newMetaState.dateEnteredStage = resolvedDateEntered;
             metaChanged = true;
+          } else if (currentMeta.dateEnteredStage !== resolvedDateEntered) {
+            newMetaState.dateEnteredStage = resolvedDateEntered;
+            metaChanged = true;
           }
           if (r.responsable && currentMeta.responsable !== r.responsable) {
             newMetaState.responsable = r.responsable;
@@ -695,12 +700,15 @@ export default function LeadsSection({
     setIsFormOpen(false);
   };
 
-  const getDaysInStage = (dateEntered: string) => {
+  const getDaysInStage = (dateEntered: string | null | undefined) => {
+    if (!dateEntered) return 0;
     try {
-      const today = new Date('2026-06-14'); // System metadata default date
-      const entered = new Date(dateEntered);
-      const diffTime = Math.abs(today.getTime() - entered.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const today = new Date();
+      const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const d1 = new Date(todayString);
+      const d2 = new Date(dateEntered.split('T')[0]);
+      const diffTime = Math.abs(d1.getTime() - d2.getTime());
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
       return isNaN(diffDays) ? 0 : diffDays;
     } catch (e) {
       return 0;
@@ -775,32 +783,30 @@ export default function LeadsSection({
       setKanbanMeta(updatedMeta);
     }
 
-    const defaultTarget = getDefaultStageForCustom(targetStage);
-    let newEstadoProyecto: any = undefined;
-    let newStatusProyecto: any = undefined;
-    if (defaultTarget === 'Negociación') {
-      newEstadoProyecto = 'Negociación';
-      newStatusProyecto = 'Warm';
-    } else if (defaultTarget === 'Cotizado') {
-      newEstadoProyecto = 'Propuesta';
-      newStatusProyecto = 'Cool';
-    } else if (defaultTarget === 'Nuevo' || defaultTarget === 'Contactado') {
-      newEstadoProyecto = 'Propuesta';
-      newStatusProyecto = 'Cool';
+    // Reset column sorting for target stage to preserve manual ordering position
+    if (columnSorting[targetStage]) {
+      setColumnSorting(prev => ({
+        ...prev,
+        [targetStage]: null
+      }));
     }
 
     newList.forEach((rec, idx) => {
       const newPriority = (newList.length - idx) * 10;
-      const isDragged = rec.id === draggedId;
+      const isDraggedRecord = rec.id === draggedId;
+      const changedStage = sourceStage !== targetStage;
 
       const updatedRecord: CRMRecord = {
         ...rec,
         etapa: targetStage,
         prioridad: newPriority,
-        nivel_termo: isDragged && newStatusProyecto !== undefined ? newStatusProyecto : (rec.nivel_termo || rec.status_proyecto || 'Cool'),
-        estado: isDragged && newEstadoProyecto !== undefined ? newEstadoProyecto : (rec.estado || rec.estado_proyecto || 'Propuesta'),
-        status_proyecto: isDragged && newStatusProyecto !== undefined ? newStatusProyecto : rec.status_proyecto,
-        estado_proyecto: isDragged && newEstadoProyecto !== undefined ? newEstadoProyecto : rec.estado_proyecto
+        // Reset stagnation date to today if the dragged record changed stage
+        fecha_cambio_etapa: (isDraggedRecord && changedStage) ? getMexicoCityDateString() : (rec.fecha_cambio_etapa || rec.fecha_registro || getMexicoCityDateString()),
+        // Preserve values instead of forcing stage-based default status/state variables
+        nivel_termo: rec.nivel_termo || rec.status_proyecto || 'Cool',
+        estado: rec.estado || rec.estado_proyecto || 'Propuesta',
+        status_proyecto: rec.status_proyecto || 'Cool',
+        estado_proyecto: rec.estado_proyecto || 'Propuesta'
       };
 
       onUpdateRecord(updatedRecord);
@@ -896,6 +902,33 @@ export default function LeadsSection({
 
     saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
   };
+
+  const handleResetStagnation = useCallback((record: CRMRecord) => {
+    const todayString = getMexicoCityDateString();
+    const updatedRecord = { ...record, fecha_cambio_etapa: todayString };
+    
+    setKanbanMeta(prev => {
+      if (prev[record.id]) {
+        return {
+          ...prev,
+          [record.id]: {
+            ...prev[record.id],
+            dateEnteredStage: todayString
+          }
+        };
+      }
+      return prev;
+    });
+
+    onUpdateRecord(updatedRecord); // Dispara el guardado en BD
+    onShowAudit('MODIFICACIÓN', `Se reinició a cero el contador de estancamiento del folio ${record.informacion_general_folio}`);
+  }, [onUpdateRecord, onShowAudit, setKanbanMeta]);
+
+  const handleUpdateTermo = useCallback((record: CRMRecord, newTermo: string) => {
+    const updatedRecord = { ...record, nivel_termo: newTermo, status_proyecto: newTermo as any };
+    onUpdateRecord(updatedRecord); // Dispara el guardado en BD
+    onShowAudit('MODIFICACIÓN', `Temperatura del folio ${record.informacion_general_folio} cambió a ${newTermo}`);
+  }, [onUpdateRecord, onShowAudit]);
 
   const handleAddNewCardInStage = (stage: string) => {
     if (role === 'Solo Lectura') {
@@ -1210,6 +1243,8 @@ export default function LeadsSection({
         dbUsers={dbUsers}
         kanbanColumns={kanbanColumns}
         role={role}
+        onAddContact={onAddContact}
+        onResetStagnation={handleResetStagnation}
       />
     );
   };
@@ -1376,6 +1411,7 @@ export default function LeadsSection({
           getStageStyles={getStageStyles}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
+          onResetStagnation={handleResetStagnation}
         />
       ) : (
         <KanbanBoard
@@ -1410,6 +1446,8 @@ export default function LeadsSection({
           getStageStyles={getStageStyles}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
+          onUpdateTermo={handleUpdateTermo}
+          onResetStagnation={handleResetStagnation}
         />
       )}
 

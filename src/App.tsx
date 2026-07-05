@@ -1433,6 +1433,10 @@ export default function App() {
                   }
                 }}
                 onShowAudit={appendAuditLog}
+                onAddContact={(nCon) => {
+                  setContacts((prev) => [nCon, ...prev]);
+                  syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
+                }}
               />
             )}
 

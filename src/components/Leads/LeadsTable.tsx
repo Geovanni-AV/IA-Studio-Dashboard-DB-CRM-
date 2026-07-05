@@ -22,7 +22,8 @@ import {
   FileText, 
   Clock,
   MoreVertical,
-  Activity
+  Activity,
+  RefreshCw
 } from 'lucide-react';
 import { CRMRecord, UserRole, UserAccount, FollowupEntry } from '../../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../../dateUtils';
@@ -47,6 +48,7 @@ interface LeadsTableProps {
   getStageStyles: (st: string) => { dot: string; bg: string };
   searchTerm: string;
   setSearchTerm: React.Dispatch<React.SetStateAction<string>>;
+  onResetStagnation: (record: CRMRecord) => void;
 }
 
 export default function LeadsTable({
@@ -66,7 +68,8 @@ export default function LeadsTable({
   getDaysInStage,
   getStageStyles,
   searchTerm,
-  setSearchTerm
+  setSearchTerm,
+  onResetStagnation
 }: LeadsTableProps) {
   
   // Table specific filters, sorting and pagination states
@@ -308,18 +311,18 @@ export default function LeadsTable({
 
   // Lock precise column widths
   const getColWidthClass = (colKey: string) => {
-    if (colKey === 'folio') return 'w-[6%] min-w-[70px] max-w-[85px]';
-    if (colKey === 'client') return 'w-[10%] min-w-[95px] max-w-[115px]';
-    if (colKey === 'plant') return 'w-[10%] min-w-[95px] max-w-[115px]';
-    if (colKey === 'project') return 'w-[13%] min-w-[125px] max-w-[160px]';
-    if (colKey === 'amount') return 'w-[8%] min-w-[80px] max-w-[95px]';
-    if (colKey === 'stage') return 'w-[8%] min-w-[85px] max-w-[100px]';
-    if (colKey === 'responsable') return 'w-[8%] min-w-[85px] max-w-[100px]';
-    if (colKey === 'status') return 'w-[8%] min-w-[85px] max-w-[100px]';
-    if (colKey === 'level') return 'w-[6%] min-w-[75px] max-w-[90px]';
-    if (colKey === 'actions_followup') return 'w-[10%] min-w-[100px] max-w-[125px]';
-    if (colKey === 'actions_history') return 'w-[10%] min-w-[100px] max-w-[125px]';
-    if (colKey === 'checklist_progress') return 'w-[8%] min-w-[85px] max-w-[105px]';
+    if (colKey === 'folio') return 'min-w-[100px]';
+    if (colKey === 'client') return 'min-w-[200px] max-w-[300px]';
+    if (colKey === 'plant') return 'min-w-[150px]';
+    if (colKey === 'project') return 'min-w-[300px] max-w-[450px]';
+    if (colKey === 'amount') return 'min-w-[140px]';
+    if (colKey === 'stage') return 'min-w-[140px]';
+    if (colKey === 'responsable') return 'min-w-[140px]';
+    if (colKey === 'status') return 'min-w-[140px]';
+    if (colKey === 'level') return 'min-w-[120px]';
+    if (colKey === 'actions_followup') return 'min-w-[140px]';
+    if (colKey === 'actions_history') return 'min-w-[160px]';
+    if (colKey === 'checklist_progress') return 'min-w-[140px]';
     return '';
   };
 
@@ -726,7 +729,7 @@ export default function LeadsTable({
           </div>
 
           <div className="overflow-x-auto max-h-[640px] overflow-y-auto scrollbar-thin min-h-[400px]">
-            <table className="w-full text-left border-collapse table-auto">
+            <table className="w-full text-left border-collapse table-auto whitespace-nowrap">
               <thead className="bg-[#f8fafc] border-b-2 border-slate-200 text-xs uppercase text-slate-500 font-label-caps sticky top-0 z-20 shadow-2xs">
                 <tr>
                   {renderHeaderCell('folio', 'Folio')}
@@ -741,7 +744,7 @@ export default function LeadsTable({
                   {renderHeaderCell('actions_followup', 'Nueva Acción', 'center')}
                   {renderHeaderCell('actions_history', 'Historial Acciones', 'center')}
                   {renderHeaderCell('checklist_progress', 'Checklist Tareas', 'center')}
-                  <th className="p-3 px-4 font-bold text-right text-slate-500 w-[8%] min-w-[100px] max-w-[120px]">Opciones</th>
+                  <th className="p-3 px-4 font-bold text-right text-slate-500 min-w-[150px]">Opciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-150 text-sm select-text">
@@ -857,8 +860,30 @@ export default function LeadsTable({
                         </td>
                         
                         {/* Options button */}
-                        <td className="p-3 px-4 text-right w-[8%] min-w-[100px] max-w-[120px] relative">
+                        <td className="p-3 px-4 text-right min-w-[150px] relative">
                           <div className="flex items-center justify-end gap-1.5">
+                            {r.informacion_general_link_cotizacion && r.informacion_general_link_cotizacion !== 'N/A' && r.informacion_general_link_cotizacion.trim().startsWith('http') && (
+                              <a 
+                                href={r.informacion_general_link_cotizacion.trim()} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded transition-colors border border-transparent hover:border-emerald-200 cursor-pointer"
+                                title="Ver Cotización (PDF)"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </a>
+                            )}
+                            {role !== 'Solo Lectura' && (
+                              <button
+                                onClick={() => {
+                                  onResetStagnation(r);
+                                }}
+                                className="p-1 hover:bg-blue-50 rounded text-slate-400 hover:text-blue-600 transition-colors cursor-pointer"
+                                title="Reiniciar estancamiento a 0 días"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setActiveDrawerRecordId(r.id);

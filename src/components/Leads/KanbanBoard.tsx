@@ -12,7 +12,13 @@ import {
   FileText, 
   MessageSquare, 
   MapPin, 
-  FilterX 
+  FilterX,
+  Trophy,
+  Flame,
+  Zap,
+  Snowflake,
+  RefreshCw,
+  ChevronDown
 } from 'lucide-react';
 import { CRMRecord, UserRole, UserAccount } from '../../types';
 
@@ -45,6 +51,8 @@ interface KanbanCardItemProps {
   getInitials: (name: string) => string;
   getAvatarBg: (name: string | null | undefined) => string;
   stageThresholds: Record<string, { warn: number; critical: number }>;
+  onUpdateTermo: (record: CRMRecord, newTermo: string) => void;
+  onResetStagnation: (record: CRMRecord) => void;
 }
 
 const areEqual = (prevProps: KanbanCardItemProps, nextProps: KanbanCardItemProps) => {
@@ -58,6 +66,8 @@ const areEqual = (prevProps: KanbanCardItemProps, nextProps: KanbanCardItemProps
     prevProps.card.informacion_general_planta === nextProps.card.informacion_general_planta &&
     prevProps.card.informacion_general_link_cotizacion === nextProps.card.informacion_general_link_cotizacion &&
     prevProps.card.status_proyecto === nextProps.card.status_proyecto &&
+    prevProps.card.fecha_cambio_etapa === nextProps.card.fecha_cambio_etapa &&
+    prevProps.card.stagnation_days_limit === nextProps.card.stagnation_days_limit &&
     JSON.stringify(prevProps.card.acciones_seguimiento) === JSON.stringify(nextProps.card.acciones_seguimiento) &&
     prevProps.role === nextProps.role &&
     prevProps.stage === nextProps.stage &&
@@ -89,9 +99,12 @@ const KanbanCardItem = React.memo(function KanbanCardItem({
   setPdfPromptOpen,
   getInitials,
   getAvatarBg,
-  stageThresholds
+  stageThresholds,
+  onUpdateTermo,
+  onResetStagnation
 }: KanbanCardItemProps) {
-  const days = getDaysInStage(meta.dateEnteredStage);
+  const [isTermoOpen, setIsTermoOpen] = useState(false);
+  const days = getDaysInStage(card.fecha_cambio_etapa || card.fecha_registro || '');
   
   const getDaysSemaphore = (st: string, d: number) => {
     const thresh = stageThresholds[st] || { warn: 5, critical: 10 };
@@ -110,12 +123,12 @@ const KanbanCardItem = React.memo(function KanbanCardItem({
     const lastFollow = card.acciones_seguimiento[card.acciones_seguimiento.length - 1];
     if (!lastFollow.fecha) return false;
     const fDate = new Date(lastFollow.fecha);
-    const tDate = new Date('2026-06-14'); // Today metadata reference date
+    const tDate = new Date(); // Today's date dynamically
     return fDate < tDate;
   };
   const overdue = checkFollowupOverdue();
 
-  const stagLimit = meta.stagnation_days_limit || 5;
+  const stagLimit = card.stagnation_days_limit ?? 5;
   const isStalled = days >= stagLimit;
 
   const lastInteraction = card.acciones_seguimiento && card.acciones_seguimiento.length > 0
@@ -137,39 +150,52 @@ const KanbanCardItem = React.memo(function KanbanCardItem({
     }
   };
 
-  const renderTemperaturePill = (status: string | null | undefined) => {
-    switch (status) {
-      case 'Hot':
-        return (
-          <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-200">
-            <span>🔥</span> HOT
-          </span>
-        );
-      case 'Warm':
-        return (
-          <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">
-            <span>⚡</span> WARM
-          </span>
-        );
-      case 'Cool':
-        return (
-          <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200">
-            <span>❄️</span> COOL
-          </span>
-        );
-      case 'Win':
-        return (
-          <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-            <span>🏆</span> WIN
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
-            <span>❓</span> S/D
-          </span>
-        );
-    }
+  const renderTemperatureBadge = (record: CRMRecord) => {
+    const temp = record.nivel_termo || record.status_proyecto || 'Warm';
+    let style = "text-amber-600 bg-amber-50 border-amber-200";
+    let icon = <Zap className="w-3 h-3"/>;
+    
+    if (temp === 'Win') { style = "text-emerald-600 bg-emerald-50 border-emerald-200"; icon = <Trophy className="w-3 h-3"/>; }
+    if (temp === 'Hot') { style = "text-red-600 bg-red-50 border-red-200"; icon = <Flame className="w-3 h-3"/>; }
+    if (temp === 'Cool') { style = "text-blue-600 bg-blue-50 border-blue-200"; icon = <Snowflake className="w-3 h-3"/>; }
+
+    const isReadOnly = role === 'Solo Lectura';
+
+    return (
+      <div className="relative">
+        <button 
+          type="button"
+          disabled={isReadOnly}
+          onClick={(e) => { 
+            e.stopPropagation(); 
+            setIsTermoOpen(!isTermoOpen); 
+          }} 
+          className={`hover:shadow-sm active:scale-95 transition-all px-2 py-1 rounded-full font-bold text-[10px] flex items-center gap-1 border ${style} ${isReadOnly ? '' : 'cursor-pointer'}`}
+          title="Cambiar Nivel de Interés"
+        >
+          {icon} {temp} {!isReadOnly && <ChevronDown className="w-3 h-3 opacity-50" />}
+        </button>
+
+        {isTermoOpen && !isReadOnly && (
+          <div className="absolute top-full right-0 mt-1 w-24 bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden flex flex-col">
+            {['Win', 'Hot', 'Warm', 'Cool'].map(t => (
+              <button 
+                type="button"
+                key={t}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  onUpdateTermo(record, t); 
+                  setIsTermoOpen(false); 
+                }}
+                className="px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 hover:text-blue-600 cursor-pointer text-left border-b border-slate-50 last:border-0"
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -197,8 +223,21 @@ const KanbanCardItem = React.memo(function KanbanCardItem({
             #{card.informacion_general_folio || 'S/F'}
           </span>
         </div>
-        <div className="shrink-0">
-          {renderTemperaturePill(card.status_proyecto)}
+        <div className="shrink-0 flex items-center gap-1.5">
+          {role !== 'Solo Lectura' && (
+            <button 
+              type="button"
+              onClick={(e) => { 
+                e.stopPropagation(); 
+                onResetStagnation(card); 
+              }} 
+              className="p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer" 
+              title="Reiniciar días estancado a 0"
+            >
+              <RefreshCw className="w-3.5 h-3.5 animate-spin-hover" />
+            </button>
+          )}
+          {renderTemperatureBadge(card)}
         </div>
       </div>
 
@@ -328,6 +367,8 @@ interface KanbanBoardProps {
   getStageStyles: (st: string) => { dot: string; bg: string };
   searchTerm: string;
   setSearchTerm: React.Dispatch<React.SetStateAction<string>>;
+  onUpdateTermo: (record: CRMRecord, newTermo: string) => void;
+  onResetStagnation: (record: CRMRecord) => void;
 }
 
 export default function KanbanBoard({
@@ -361,7 +402,9 @@ export default function KanbanBoard({
   stageThresholds,
   getStageStyles,
   searchTerm,
-  setSearchTerm
+  setSearchTerm,
+  onUpdateTermo,
+  onResetStagnation
 }: KanbanBoardProps) {
   
   const [kanbanFilterResponsable, setKanbanFilterResponsable] = useState<string>('All');
@@ -471,8 +514,8 @@ export default function KanbanBoard({
         cards = [...cards].sort((a,b) => (b.total_subtotal_cotizacion || 0) - (a.total_subtotal_cotizacion || 0));
       } else if (sortType === 'antiguedad') {
         cards = [...cards].sort((a,b) => {
-          const daysA = getDaysInStage(kanbanMeta[a.id]?.dateEnteredStage || '');
-          const daysB = getDaysInStage(kanbanMeta[b.id]?.dateEnteredStage || '');
+          const daysA = getDaysInStage(a.fecha_cambio_etapa || a.fecha_registro || '');
+          const daysB = getDaysInStage(b.fecha_cambio_etapa || b.fecha_registro || '');
           return daysB - daysA;
         });
       } else if (sortType === 'responsable') {
@@ -496,7 +539,7 @@ export default function KanbanBoard({
       const limit = wipLimits[stage] || 99;
       const isOverWip = cards.length > limit;
 
-      const totalDays = cards.reduce((acc, r) => acc + getDaysInStage(kanbanMeta[r.id]?.dateEnteredStage || ''), 0);
+      const totalDays = cards.reduce((acc, r) => acc + getDaysInStage(r.fecha_cambio_etapa || r.fecha_registro || ''), 0);
       const avgDays = cards.length > 0 ? (totalDays / cards.length).toFixed(1) : '0';
 
       return {
@@ -875,6 +918,8 @@ export default function KanbanBoard({
                         getInitials={getInitials}
                         getAvatarBg={getAvatarBg}
                         stageThresholds={stageThresholds}
+                        onUpdateTermo={onUpdateTermo}
+                        onResetStagnation={onResetStagnation}
                       />
                     );
                   })
