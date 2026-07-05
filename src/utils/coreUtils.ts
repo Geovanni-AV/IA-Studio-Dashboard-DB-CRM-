@@ -7,15 +7,28 @@ export const safeRound = (value: number): number => {
 };
 
 /**
- * Intenta convertir un JSON. Si falla, reporta el error y devuelve un valor por defecto
- * para evitar que la aplicación entera colapse.
+ * Intenta convertir un JSON de Supabase. Si detecta que es texto plano heredado,
+ * lo formatea de manera segura sin romper la aplicación.
  */
 export const safeJsonParse = <T,>(jsonString: string | null | undefined, fallback: T, fieldName: string): T => {
   if (!jsonString) return fallback;
+  
+  const trimmed = jsonString.trim();
+  
+  // 1. Escudo Anti-Texto Plano: Si no empieza con '[' (Arreglo) o '{' (Objeto), es texto plano.
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) {
+    // Si buscábamos un arreglo (ej. tags), envolvemos el texto en uno para no romper el .map()
+    if (Array.isArray(fallback)) {
+      return [trimmed] as unknown as T;
+    }
+    return trimmed as unknown as T;
+  }
+
+  // 2. Parseo estándar
   try {
-    return JSON.parse(jsonString) as T;
+    return JSON.parse(trimmed) as T;
   } catch (error) {
-    console.error(`🚨 [Integridad de Datos] Error al leer el campo JSON '${fieldName}':`, error);
+    console.warn(`⚠️ [Autocorrección] El campo '${fieldName}' contenía JSON inválido. Usando valor por defecto.`);
     return fallback;
   }
 };

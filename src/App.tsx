@@ -23,7 +23,8 @@ import {
   subscribeToCRMRecords,
   getCRMSettings,
   subscribeToCRMSettings,
-  syncDailyExchangeRate
+  syncDailyExchangeRate,
+  mapRawCRMRecord
 } from './supabaseService';
 
 // Subcomponents
@@ -588,13 +589,15 @@ export default function App() {
           if (prevRecords.some(r => r.id === payload.new.id)) {
             return prevRecords;
           }
-          return [payload.new, ...prevRecords];
+          const mappedNewRecord = mapRawCRMRecord(payload.new);
+          return [mappedNewRecord, ...prevRecords];
         }
         
         // CASO B: Alguien movió de columna, editó o agregó tareas a un proyecto
         if (payload.eventType === 'UPDATE') {
+          const mappedUpdatedRecord = mapRawCRMRecord(payload.new);
           return prevRecords.map((record) => 
-            record.id === payload.new.id ? payload.new : record
+            record.id === payload.new.id ? mappedUpdatedRecord : record
           );
         }
         
