@@ -33,7 +33,7 @@ export interface CRMRecord {
   total_iva_cotizacion: number | null; // 16% of Subtotal
   total_general_cotizacion: number | null; // Subtotal + IVA
   informacion_general_moneda: 'USD' | 'MXN'; // Contract default currency
-  estado_proyecto?: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null; // Column 6
+  estado_proyecto?: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido' | null; // Column 6
   status_proyecto?: 'Win' | 'Hot' | 'Warm' | 'Cool' | null; // Column 7
   
   // Purchase Order Details (for Cerrado Ganado)

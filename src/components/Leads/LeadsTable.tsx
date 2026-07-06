@@ -1430,7 +1430,7 @@ function NivelTermoCell({
 
   const handleSelect = (lvl: 'Win' | 'Hot' | 'Warm' | 'Cool' | null) => {
     if (role === 'Solo Lectura') return;
-    let newStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | null = record.estado_proyecto || null;
+    let newStatus: 'Propuesta' | 'Negociación' | 'Cerrado Ganado' | 'Cerrado Perdido' | null = record.estado_proyecto || null;
     if (lvl === 'Win') {
       newStatus = 'Cerrado Ganado';
     } else if (lvl === 'Hot' || lvl === 'Warm') {

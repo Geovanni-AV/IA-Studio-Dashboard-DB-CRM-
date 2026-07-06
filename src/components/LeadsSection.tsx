@@ -404,18 +404,14 @@ export default function LeadsSection({
     const defaultStages = ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
     if (defaultStages.includes(customStage)) return customStage;
 
-    const colNames = getColumnNames(kanbanColumns);
-    const idx = colNames.indexOf(customStage);
-    if (idx !== -1 && idx < defaultStages.length) {
-      return defaultStages[idx];
-    }
-
-    if (customStage.toLowerCase().includes('ganado')) return 'Cerrado Ganado';
-    if (customStage.toLowerCase().includes('perdido')) return 'Cerrado Perdido';
-    if (customStage.toLowerCase().includes('negoc')) return 'Negociación';
-    if (customStage.toLowerCase().includes('cotiz') || customStage.toLowerCase().includes('lead')) return 'Cotizado';
-    if (customStage.toLowerCase().includes('contact')) return 'Contactado';
-    if (customStage.toLowerCase().includes('prospect') || customStage.toLowerCase().includes('nuev')) return 'Nuevo';
+    const lower = customStage.toLowerCase();
+    // Evaluamos semánticamente, incluyendo 'archivar' como etapa de cierre
+    if (lower.includes('ganado')) return 'Cerrado Ganado';
+    if (lower.includes('perdid') || lower.includes('archiv')) return 'Cerrado Perdido'; 
+    if (lower.includes('negoc')) return 'Negociación';
+    if (lower.includes('cotiz') || lower.includes('lead')) return 'Cotizado';
+    if (lower.includes('contact')) return 'Contactado';
+    if (lower.includes('prospect') || lower.includes('nuev')) return 'Nuevo';
 
     return customStage;
   };
@@ -888,26 +884,32 @@ export default function LeadsSection({
 
     const defaultTarget = getDefaultStageForCustom(targetStage);
 
-    // Check if target stage requires confirmation
+    // 1. Verificamos si la columna destino tiene activado el "Modo Seguro"
     const colConfig = kanbanColumns.find(c => {
       const colName = typeof c === 'string' ? c : c.name;
       return colName.trim().toLowerCase() === targetStage.trim().toLowerCase();
     });
-    const requireConfirm = colConfig && typeof colConfig === 'object'
-      ? !!colConfig.require_confirm
-      : false;
+    const requireConfirm = colConfig && typeof colConfig === 'object' ? !!colConfig.require_confirm : false;
 
-    if (sourceStage !== targetStage && requireConfirm && !(defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
-      if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
-        return;
+    // 2. Nueva lógica estricta
+    if (sourceStage !== targetStage) {
+      if (requireConfirm) {
+        // Si la columna es "Segura" Y es de cierre (Ganado, Perdido o Archivar) -> Abrimos Modal de Cierre
+        if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
+          setPendingDrag({ recordId, targetStage, sourceStage });
+          setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+          setCloseNotes('');
+          return; // Detenemos el flujo hasta que guarde el modal
+        } else {
+          // Si la columna es "Segura" pero NO es de cierre (Ej. Cotización Enviada) -> Solo alert nativo
+          if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
+            return; // Si cancela, se revierte
+          }
+        }
+      } else {
+        // Si la columna es de cierre, pero el admin NO le puso "Modo Seguro",
+        // se moverá libremente sin preguntar (respetando la configuración visual).
       }
-    }
-
-    if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
-      setPendingDrag({ recordId, targetStage, sourceStage });
-      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
-      setCloseNotes('');
-      return;
     }
 
     let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
@@ -942,26 +944,32 @@ export default function LeadsSection({
 
     const defaultTarget = getDefaultStageForCustom(targetStage);
 
-    // Check if target stage requires confirmation
+    // 1. Verificamos si la columna destino tiene activado el "Modo Seguro"
     const colConfig = kanbanColumns.find(c => {
       const colName = typeof c === 'string' ? c : c.name;
       return colName.trim().toLowerCase() === targetStage.trim().toLowerCase();
     });
-    const requireConfirm = colConfig && typeof colConfig === 'object'
-      ? !!colConfig.require_confirm
-      : false;
+    const requireConfirm = colConfig && typeof colConfig === 'object' ? !!colConfig.require_confirm : false;
 
-    if (sourceStage !== targetStage && requireConfirm && !(defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
-      if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
-        return;
+    // 2. Nueva lógica estricta
+    if (sourceStage !== targetStage) {
+      if (requireConfirm) {
+        // Si la columna es "Segura" Y es de cierre (Ganado, Perdido o Archivar) -> Abrimos Modal de Cierre
+        if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
+          setPendingDrag({ recordId, targetStage, sourceStage });
+          setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+          setCloseNotes('');
+          return; // Detenemos el flujo hasta que guarde el modal
+        } else {
+          // Si la columna es "Segura" pero NO es de cierre (Ej. Cotización Enviada) -> Solo alert nativo
+          if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
+            return; // Si cancela, se revierte
+          }
+        }
+      } else {
+        // Si la columna es de cierre, pero el admin NO le puso "Modo Seguro",
+        // se moverá libremente sin preguntar (respetando la configuración visual).
       }
-    }
-
-    if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
-      setPendingDrag({ recordId, targetStage, sourceStage });
-      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
-      setCloseNotes('');
-      return;
     }
 
     let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
@@ -1097,12 +1105,13 @@ export default function LeadsSection({
       
       const updatedCard: CRMRecord = {
         ...sourceCard,
-        estado_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : null,
-        status_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Win' : 'Cool',
+        // Aseguramos que si es archivado o perdido, el estado_proyecto mantenga su integridad
+        estado_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : 'Cerrado Perdido',
+        status_proyecto: defaultTarget === 'Cerrado Ganado' ? 'Win' : 'Cool', 
         notas_comerciales: closeNotes ? `${sourceCard.notas_comerciales || ''}\n[Cierre ${targetStage} - Motivo: ${closeReason}]: ${closeNotes}` : sourceCard.notas_comerciales,
-        etapa: targetStage,
+        etapa: targetStage, // Forzamos guardar textualmente 'Archivar' o la etapa destino
         nivel_termo: defaultTarget === 'Cerrado Ganado' ? 'Win' : 'Cool',
-        estado: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : 'Propuesta'
+        estado: defaultTarget === 'Cerrado Ganado' ? 'Cerrado Ganado' : 'Cerrado Perdido'
       };
 
       const updatedMeta = { ...kanbanMeta };
