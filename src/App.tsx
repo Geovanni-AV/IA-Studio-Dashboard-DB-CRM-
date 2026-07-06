@@ -69,7 +69,13 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // --- Persistent States ---
+  // --- Estados Maestros en Memoria (RAM) ---
+  const [records, setRecords] = useState<CRMRecord[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  // Configuración de interfaz que SÍ puede quedarse en localStorage
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('verse_sidebar_collapsed') === 'true';
   });
@@ -81,26 +87,6 @@ export default function App() {
       return next;
     });
   };
-
-  const [records, setRecords] = useState<CRMRecord[]>(() => {
-    const local = localStorage.getItem('verse_crm_records');
-    return local ? JSON.parse(local) : INITIAL_RECORDS;
-  });
-
-  const [contacts, setContacts] = useState<Contact[]>(() => {
-    const local = localStorage.getItem('verse_crm_contacts');
-    return local ? JSON.parse(local) : INITIAL_CONTACTS;
-  });
-
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(() => {
-    const local = localStorage.getItem('verse_crm_pos');
-    return local ? JSON.parse(local) : [];
-  });
-
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    const local = localStorage.getItem('verse_crm_audit');
-    return local ? JSON.parse(local) : INITIAL_AUDIT_LOGS;
-  });
 
   // Simulator configurations
   const [role, setRole] = useState<UserRole>(() => {
@@ -614,22 +600,7 @@ export default function App() {
     };
   }, [supabaseStatus]);
 
-  // Save states automatically
-  useEffect(() => {
-    localStorage.setItem('verse_crm_records', JSON.stringify(records));
-  }, [records]);
 
-  useEffect(() => {
-    localStorage.setItem('verse_crm_contacts', JSON.stringify(contacts));
-  }, [contacts]);
-
-  useEffect(() => {
-    localStorage.setItem('verse_crm_pos', JSON.stringify(purchaseOrders));
-  }, [purchaseOrders]);
-
-  useEffect(() => {
-    localStorage.setItem('verse_crm_audit', JSON.stringify(auditLogs));
-  }, [auditLogs]);
 
   useEffect(() => {
     const prevRole = localStorage.getItem('verse_crm_role');
@@ -1410,14 +1381,23 @@ export default function App() {
 
           {/* VIEW AREA / SCREEN RENDERING GRID */}
           <div className="flex-1 p-6 overflow-y-auto w-full mx-auto space-y-6">
-            <Suspense 
-              fallback={
-                <div className="flex flex-col items-center justify-center w-full min-h-[50vh] text-slate-400">
-                  <div className="w-8 h-8 border-2 border-t-transparent border-blue-500 rounded-full animate-spin mb-4"></div>
-                  <p className="text-xs font-semibold animate-pulse tracking-wide uppercase">Cargando módulo de la consola...</p>
-                </div>
-              }
-            >
+            
+            {/* 🚨 NUEVA PANTALLA DE CARGA ESTRICTA 🚨 */}
+            {isSupabaseLoading || supabaseStatus === 'LOADING' ? (
+              <div className="flex flex-col items-center justify-center w-full min-h-[60vh] text-slate-500">
+                <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                <h3 className="text-sm font-bold text-slate-700">Sincronizando con Supabase Cloud...</h3>
+                <p className="text-xs mt-2 font-mono">Descargando expedientes y reglas de negocio seguras.</p>
+              </div>
+            ) : (
+              <Suspense 
+                fallback={
+                  <div className="flex flex-col items-center justify-center w-full min-h-[50vh] text-slate-400">
+                    <div className="w-8 h-8 border-2 border-t-transparent border-blue-500 rounded-full animate-spin mb-4"></div>
+                    <p className="text-xs font-semibold animate-pulse tracking-wide uppercase">Cargando módulo...</p>
+                  </div>
+                }
+              >
               {activeTab === 'Dashboard' && (
                 <Dashboard
                   exchangeRate={exchangeRate}
@@ -1444,21 +1424,21 @@ export default function App() {
                   hasMoreRecords={hasMoreRecords}
                   isLoadingMore={isLoadingMore}
                   onAddRecord={(nRecord) => {
-                    setRecords((prev) => [nRecord, ...prev]);
-                    syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');
-                    appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
+                    setRecords((prev) => [nRecord, ...prev]); // Actualiza RAM al instante (Optimistic)
+                    syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT'); // Sincroniza en background
+                    appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio}.`);
                   }}
                   onUpdateRecord={(uRecord) => {
                     setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
                     syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                    appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
+                    appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio}.`);
                   }}
                   onDeleteRecord={(delId) => {
                     const targetRecord = records.find(item => item.id === delId);
                     setRecords((prev) => prev.filter((item) => item.id !== delId));
                     if (targetRecord) {
                       syncCRMRecordToSupabaseIfNeeded(targetRecord, 'DELETE');
-                      appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
+                      appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio}.`);
                     }
                   }}
                   onShowAudit={appendAuditLog}
@@ -1579,6 +1559,7 @@ export default function App() {
                 />
               )}
             </Suspense>
+            )}
           </div>
 
           {/* LOWER STATUS FOOTER / TECHNICAL AUDIT CONTROL */}
