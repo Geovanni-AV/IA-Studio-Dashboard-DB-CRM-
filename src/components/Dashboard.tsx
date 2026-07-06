@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { safeRound } from '../utils/coreUtils';
 import { CRMRecord, UserRole } from '../types';
 import { 
@@ -19,30 +19,64 @@ import {
   Percent,
   Calendar,
   Users,
-  Target
+  Target,
+  Loader2
 } from 'lucide-react';
+import { getSupabaseClient, getResolvedCRMTableName, mapRawCRMRecord } from '../supabaseService';
 
 interface DashboardProps {
-  records: CRMRecord[];
   exchangeRate: number;
   currentCurrency: 'USD' | 'MXN';
   role: UserRole;
   isSupabaseConfigured?: boolean;
-  isSupabaseLoading?: boolean;
   onEditRecord: (record: CRMRecord) => void;
   onNavigate: (tab: string) => void;
 }
 
 export default function Dashboard({
-  records,
   exchangeRate,
   currentCurrency,
   role,
   isSupabaseConfigured,
-  isSupabaseLoading,
   onEditRecord,
   onNavigate
 }: DashboardProps) {
+  // FASE 4: ESTADOS LOCALES DEL DASHBOARD
+  const [records, setRecords] = useState<CRMRecord[]>([]);
+  const [isFetching, setIsFetching] = useState(true);
+
+  // FASE 4: CONSULTA DE PROYECCIÓN ESTRICTA A SUPABASE
+  useEffect(() => {
+    let active = true;
+    const fetchDashboardData = async () => {
+      setIsFetching(true);
+      const url = localStorage.getItem('verse_supabase_url') || '';
+      const key = localStorage.getItem('verse_supabase_key') || '';
+      const client = getSupabaseClient(url, key);
+
+      if (client) {
+         // PROYECCIÓN: Solo pedimos las columnas críticas. Ignoramos JSONs, links, checklists y arrays gigantes.
+         const { data, error } = await client
+           .from(getResolvedCRMTableName())
+           .select('id, informacion_general_folio, fecha_registro, fecha_inicio_proyecto, total_hardware_cotizacion, total_servicios_cotizacion, total_subtotal_cotizacion, informacion_general_moneda, estado_proyecto, status_proyecto, cliente_pais, cliente_ubicacion, etapa, nivel_termo, prioridad_nivel, responsable, informacion_general_cliente, informacion_general_proyecto, notas_comerciales')
+           .limit(10000); // Soporta hasta 10,000 registros sin afectar la RAM
+
+         if (!error && data && active) {
+            setRecords(data.map(mapRawCRMRecord));
+         }
+      }
+      if (active) setIsFetching(false);
+    };
+
+    if (isSupabaseConfigured) {
+      fetchDashboardData();
+    } else {
+      setRecords([]);
+      setIsFetching(false);
+    }
+    return () => { active = false; };
+  }, [isSupabaseConfigured]);
+
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedStatus, setSelectedStatus] = useState('Todos los estatus');
   const [selectedCountry, setSelectedCountry] = useState('Todos los países');
@@ -743,6 +777,7 @@ export default function Dashboard({
               Dashboard de pipeline y cierres
             </h1>
             <DemoBadge />
+            {isFetching && <Loader2 className="w-5 h-5 animate-spin text-blue-600 ml-2" />}
           </div>
           <p className="text-xs text-slate-500 mt-1">
             Visualización ejecutiva de metas anuales, volumen de leads y distribución geográfica.

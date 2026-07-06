@@ -35,6 +35,10 @@ interface LeadsSectionProps {
   onDeleteRecord: (id: string) => void;
   onShowAudit: (action: string, details: string) => void;
   onAddContact: (contact: Contact) => void;
+  // --- FASE 3 ---
+  onLoadMore?: () => void;
+  hasMoreRecords?: boolean;
+  isLoadingMore?: boolean;
 }
 
 // Stage configuration thresholds for alerts
@@ -69,7 +73,10 @@ export default function LeadsSection({
   onUpdateRecord,
   onDeleteRecord,
   onShowAudit,
-  onAddContact
+  onAddContact,
+  onLoadMore,
+  hasMoreRecords,
+  isLoadingMore
 }: LeadsSectionProps) {
   // Active session details
   const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
@@ -1613,6 +1620,24 @@ export default function LeadsSection({
           onUpdateTermo={handleUpdateTermo}
           onResetStagnation={handleResetStagnation}
         />
+      )}
+
+      {/* BOTÓN DE CARGA DE PAGINACIÓN - FASE 3 */}
+      {hasMoreRecords && onLoadMore && (
+        <div className="flex justify-center py-4 border-t border-slate-200 mt-4">
+          <button
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            className={`flex items-center gap-2 px-6 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-full text-xs font-bold transition-all shadow-sm ${isLoadingMore ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer hover:shadow-md'}`}
+          >
+            {isLoadingMore ? (
+              <span className="w-4 h-4 border-2 border-t-transparent border-blue-600 rounded-full animate-spin"></span>
+            ) : (
+              <ArrowDown className="w-4 h-4 text-blue-600" />
+            )}
+            {isLoadingMore ? 'Extrayendo expedientes antiguos...' : 'Cargar historial de proyectos antiguos'}
+          </button>
+        </div>
       )}
 
       {renderDrawerLateralPanel()}

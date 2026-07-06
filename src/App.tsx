@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { motion } from 'motion/react';
 import { CRMRecord, Contact, AuditLog, UserRole, UserAccount, PurchaseOrder } from './types';
 import { INITIAL_RECORDS, INITIAL_CONTACTS, INITIAL_AUDIT_LOGS } from './mockData';
 import { pushToGoogleSheets } from './googleSheetsService';
 import { getMexicoCityDateTimeString, getMexicoCityTimeString } from './dateUtils';
-import SyncSupabaseSection from './components/SyncSupabaseSection';
 import { 
   pushCRMRecordToSupabase, 
   deleteCRMRecordFromSupabase, 
@@ -24,21 +23,25 @@ import {
   getCRMSettings,
   subscribeToCRMSettings,
   syncDailyExchangeRate,
-  mapRawCRMRecord
+  mapRawCRMRecord,
+  loadMoreCRMRecords
 } from './supabaseService';
 
-// Subcomponents
-import Dashboard from './components/Dashboard';
-import LeadsSection from './components/LeadsSection';
-import QuotationsSection from './components/QuotationsSection';
-import PurchaseOrdersSection from './components/PurchaseOrdersSection';
-import ContactsSection from './components/ContactsSection';
-import FollowupsSection from './components/FollowupsSection';
-import AuditSection from './components/AuditSection';
-import SyncSettingsSection from './components/SyncSettingsSection';
+// SignInScreen se mantiene normal porque es lo primero que se ve
 import SignInScreen from './components/ui/travel-connect-signin-1';
-import UserProfileSection from './components/UserProfileSection';
-import UserManagementSection from './components/UserManagementSection';
+
+// Subcomponents convertidos a Carga Diferida (Lazy Loading)
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const LeadsSection = lazy(() => import('./components/LeadsSection'));
+const QuotationsSection = lazy(() => import('./components/QuotationsSection'));
+const PurchaseOrdersSection = lazy(() => import('./components/PurchaseOrdersSection'));
+const ContactsSection = lazy(() => import('./components/ContactsSection'));
+const FollowupsSection = lazy(() => import('./components/FollowupsSection'));
+const AuditSection = lazy(() => import('./components/AuditSection'));
+const SyncSettingsSection = lazy(() => import('./components/SyncSettingsSection'));
+const SyncSupabaseSection = lazy(() => import('./components/SyncSupabaseSection'));
+const UserProfileSection = lazy(() => import('./components/UserProfileSection'));
+const UserManagementSection = lazy(() => import('./components/UserManagementSection'));
 
 // Icons
 import {
@@ -344,6 +347,32 @@ export default function App() {
   };
 
   const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
+  // --- ESTADOS DE PAGINACIÓN FASE 3 ---
+  const [recordsOffset, setRecordsOffset] = useState(150);
+  const [hasMoreRecords, setHasMoreRecords] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  const handleLoadMoreRecords = async () => {
+    setIsLoadingMore(true);
+    const url = localStorage.getItem('verse_supabase_url') || '';
+    const key = localStorage.getItem('verse_supabase_key') || '';
+    
+    const res = await loadMoreCRMRecords(url, key, recordsOffset, 150);
+    
+    if (res.success && res.records.length > 0) {
+      // Unimos los nuevos registros cuidando no duplicar IDs
+      setRecords(prev => {
+        const newUnique = res.records.filter(r => !prev.some(p => p.id === r.id));
+        return [...prev, ...newUnique];
+      });
+      setRecordsOffset(prev => prev + 150);
+      if (res.records.length < 150) setHasMoreRecords(false); // Ya no hay más en la base de datos
+    } else {
+      setHasMoreRecords(false); // Se acabaron
+    }
+    setIsLoadingMore(false);
+  };
+
   const [supabaseStatus, setSupabaseStatus] = useState<'LOADING' | 'CONNECTED' | 'ERROR' | 'OFFLINE'>('OFFLINE');
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'info' | null }>({
     show: false,
@@ -482,7 +511,7 @@ export default function App() {
             if (result.success) {
               setRecords(result.records || []);
               setContacts(result.contacts || []);
-              setAuditLogs(result.auditLogs || []);
+              setAuditLogs(result.auditLogs ? result.auditLogs.slice(0, 15) : []);
               setPurchaseOrders(result.purchaseOrders || []);
               setSupabaseStatus('CONNECTED');
               
@@ -725,7 +754,8 @@ export default function App() {
       perfil: role,
       detalles
     };
-    setAuditLogs((prev) => [newLog, ...prev]);
+    // FASE 2: Solo retenemos 15 en RAM para que el Footer funcione. Supabase es la fuente real ahora.
+    setAuditLogs((prev) => [newLog, ...prev].slice(0, 15));
     syncAuditLogToSupabaseIfNeeded(newLog);
   }
 
@@ -1390,165 +1420,175 @@ export default function App() {
 
           {/* VIEW AREA / SCREEN RENDERING GRID */}
           <div className="flex-1 p-6 overflow-y-auto w-full mx-auto space-y-6">
-            {activeTab === 'Dashboard' && (
-              <Dashboard
-                records={records}
-                exchangeRate={exchangeRate}
-                currentCurrency={currentCurrency}
-                role={role}
-                isSupabaseConfigured={!!(localStorage.getItem('verse_supabase_url') && localStorage.getItem('verse_supabase_key'))}
-                isSupabaseLoading={isSupabaseLoading}
-                onEditRecord={(rec) => {
-                  setActiveTab('Leads/Projects');
-                }}
-                onNavigate={(tab) => {
-                  if (tab === 'Leads/Projects') setActiveTab('Leads/Projects');
-                }}
-              />
-            )}
+            <Suspense 
+              fallback={
+                <div className="flex flex-col items-center justify-center w-full min-h-[50vh] text-slate-400">
+                  <div className="w-8 h-8 border-2 border-t-transparent border-blue-500 rounded-full animate-spin mb-4"></div>
+                  <p className="text-xs font-semibold animate-pulse tracking-wide uppercase">Cargando módulo de la consola...</p>
+                </div>
+              }
+            >
+              {activeTab === 'Dashboard' && (
+                <Dashboard
+                  exchangeRate={exchangeRate}
+                  currentCurrency={currentCurrency}
+                  role={role}
+                  isSupabaseConfigured={!!(localStorage.getItem('verse_supabase_url') && localStorage.getItem('verse_supabase_key'))}
+                  onEditRecord={(rec) => {
+                    setActiveTab('Leads/Projects');
+                  }}
+                  onNavigate={(tab) => {
+                    if (tab === 'Leads/Projects') setActiveTab('Leads/Projects');
+                  }}
+                />
+              )}
 
-            {activeTab === 'Leads/Projects' && (
-              <LeadsSection
-                records={records}
-                contacts={contacts}
-                role={role}
-                dbUsers={dbUsers}
-                exchangeRate={exchangeRate}
-                onAddRecord={(nRecord) => {
-                  setRecords((prev) => [nRecord, ...prev]);
-                  syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');
-                  appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
-                }}
-                onUpdateRecord={(uRecord) => {
-                  setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
-                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                  appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
-                }}
-                onDeleteRecord={(delId) => {
-                  const targetRecord = records.find(item => item.id === delId);
-                  setRecords((prev) => prev.filter((item) => item.id !== delId));
-                  if (targetRecord) {
-                    syncCRMRecordToSupabaseIfNeeded(targetRecord, 'DELETE');
-                    appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
-                  }
-                }}
-                onShowAudit={appendAuditLog}
-                onAddContact={(nCon) => {
-                  setContacts((prev) => [nCon, ...prev]);
-                  syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
-                }}
-              />
-            )}
+              {activeTab === 'Leads/Projects' && (
+                <LeadsSection
+                  records={records}
+                  contacts={contacts}
+                  role={role}
+                  dbUsers={dbUsers}
+                  exchangeRate={exchangeRate}
+                  onLoadMore={handleLoadMoreRecords}
+                  hasMoreRecords={hasMoreRecords}
+                  isLoadingMore={isLoadingMore}
+                  onAddRecord={(nRecord) => {
+                    setRecords((prev) => [nRecord, ...prev]);
+                    syncCRMRecordToSupabaseIfNeeded(nRecord, 'UPSERT');
+                    appendAuditLog('ALTA REGISTRO', `Creó folio ${nRecord.informacion_general_folio} de forma local.`);
+                  }}
+                  onUpdateRecord={(uRecord) => {
+                    setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                    syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
+                    appendAuditLog('MODIFICACIÓN', `Actualizó folio ${uRecord.informacion_general_folio} de forma local.`);
+                  }}
+                  onDeleteRecord={(delId) => {
+                    const targetRecord = records.find(item => item.id === delId);
+                    setRecords((prev) => prev.filter((item) => item.id !== delId));
+                    if (targetRecord) {
+                      syncCRMRecordToSupabaseIfNeeded(targetRecord, 'DELETE');
+                      appendAuditLog('ELIMINACIÓN', `Eliminó folio ${targetRecord.informacion_general_folio} de forma local.`);
+                    }
+                  }}
+                  onShowAudit={appendAuditLog}
+                  onAddContact={(nCon) => {
+                    setContacts((prev) => [nCon, ...prev]);
+                    syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
+                  }}
+                />
+              )}
 
-            {activeTab === 'Quotations' && (
-              <QuotationsSection records={records} exchangeRate={exchangeRate} onShowAudit={appendAuditLog} />
-            )}
+              {activeTab === 'Quotations' && (
+                <QuotationsSection records={records} exchangeRate={exchangeRate} onShowAudit={appendAuditLog} />
+              )}
 
-            {activeTab === 'PurchaseOrders' && (
-              <PurchaseOrdersSection
-                records={records}
-                role={role}
-                onUpdateRecord={(uRecord) => {
-                  setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
-                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                }}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+              {activeTab === 'PurchaseOrders' && (
+                <PurchaseOrdersSection
+                  records={records}
+                  role={role}
+                  onUpdateRecord={(uRecord) => {
+                    setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                    syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
+                  }}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
 
-            {activeTab === 'Contacts' && (
-              <ContactsSection
-                contacts={contacts}
-                role={role}
-                onAddContact={(nCon) => {
-                  setContacts((prev) => [nCon, ...prev]);
-                  syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
-                }}
-                onDeleteContact={(delId) => {
-                  const targetContact = contacts.find(c => c.id === delId);
-                  setContacts((prev) => prev.filter((item) => item.id !== delId));
-                  if (targetContact) {
-                    syncContactToSupabaseIfNeeded(targetContact, 'DELETE');
-                  }
-                }}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+              {activeTab === 'Contacts' && (
+                <ContactsSection
+                  contacts={contacts}
+                  role={role}
+                  onAddContact={(nCon) => {
+                    setContacts((prev) => [nCon, ...prev]);
+                    syncContactToSupabaseIfNeeded(nCon, 'UPSERT');
+                  }}
+                  onDeleteContact={(delId) => {
+                    const targetContact = contacts.find(c => c.id === delId);
+                    setContacts((prev) => prev.filter((item) => item.id !== delId));
+                    if (targetContact) {
+                      syncContactToSupabaseIfNeeded(targetContact, 'DELETE');
+                    }
+                  }}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
 
-            {activeTab === 'Followups' && (
-              <FollowupsSection
-                records={records}
-                role={role}
-                onUpdateRecord={(uRecord) => {
-                  setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
-                  syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
-                }}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+              {activeTab === 'Followups' && (
+                <FollowupsSection
+                  records={records}
+                  role={role}
+                  onUpdateRecord={(uRecord) => {
+                    setRecords((prev) => prev.map((item) => (item.id === uRecord.id ? uRecord : item)));
+                    syncCRMRecordToSupabaseIfNeeded(uRecord, 'UPSERT');
+                  }}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
 
-            {activeTab === 'Audit' && (
-              <AuditSection logs={auditLogs} role={role} onClearLogs={handleClearLogs} onShowAudit={appendAuditLog} />
-            )}
+              {activeTab === 'Audit' && (
+                <AuditSection role={role} onShowAudit={appendAuditLog} />
+              )}
 
-            {activeTab === 'SyncSettings' && (
-              <SyncSettingsSection
-                role={role}
-                onResetDatabase={handleResetDatabase}
-                onSyncComplete={async (responseLogs, syncedRecords) => {
-                  if (syncedRecords && syncedRecords.length > 0) {
-                    setRecords(syncedRecords);
-                    
-                    // Subir automáticamente a Supabase los nuevos registros sincronizados
-                    const url = localStorage.getItem('verse_supabase_url') || '';
-                    const key = localStorage.getItem('verse_supabase_key') || '';
-                    if (url && key) {
-                      showToast('Subiendo registros de Google Sheets a Supabase Cloud...', 'info');
-                      const res = await bulkUploadToSupabase(url, key, syncedRecords, contacts, auditLogs);
-                      if (res.success) {
-                        showToast('¡Base de datos Supabase actualizada correctamente!', 'success');
-                        appendAuditLog('CONEXIÓN HOJA', 'Sincronizó y subió la base de datos desde Google Sheets a Supabase.');
-                      } else {
-                        showToast(`Error al subir a Supabase: ${res.message}`, 'error');
+              {activeTab === 'SyncSettings' && (
+                <SyncSettingsSection
+                  role={role}
+                  onResetDatabase={handleResetDatabase}
+                  onSyncComplete={async (responseLogs, syncedRecords) => {
+                    if (syncedRecords && syncedRecords.length > 0) {
+                      setRecords(syncedRecords);
+                      
+                      // Subir automáticamente a Supabase los nuevos registros sincronizados
+                      const url = localStorage.getItem('verse_supabase_url') || '';
+                      const key = localStorage.getItem('verse_supabase_key') || '';
+                      if (url && key) {
+                        showToast('Subiendo registros de Google Sheets a Supabase Cloud...', 'info');
+                        const res = await bulkUploadToSupabase(url, key, syncedRecords, contacts, auditLogs);
+                        if (res.success) {
+                          showToast('¡Base de datos Supabase actualizada correctamente!', 'success');
+                          appendAuditLog('CONEXIÓN HOJA', 'Sincronizó y subió la base de datos desde Google Sheets a Supabase.');
+                        } else {
+                          showToast(`Error al subir a Supabase: ${res.message}`, 'error');
+                        }
                       }
                     }
-                  }
-                }}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+                  }}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
 
-            {activeTab === 'SyncSupabase' && (
-              <SyncSupabaseSection
-                role={role}
-                records={records}
-                contacts={contacts}
-                auditLogs={auditLogs}
-                onSyncComplete={(syncedRecords, syncedContacts, syncedLogs) => {
-                  setRecords(syncedRecords || []);
-                  setContacts(syncedContacts || []);
-                  setAuditLogs(syncedLogs || []);
-                }}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+              {activeTab === 'SyncSupabase' && (
+                <SyncSupabaseSection
+                  role={role}
+                  records={records}
+                  contacts={contacts}
+                  auditLogs={auditLogs}
+                  onSyncComplete={(syncedRecords, syncedContacts, syncedLogs) => {
+                    setRecords(syncedRecords || []);
+                    setContacts(syncedContacts || []);
+                    setAuditLogs(syncedLogs || []);
+                  }}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
 
-            {activeTab === 'UserProfile' && (
-              <UserProfileSection
-                googleUser={googleUser}
-                googleToken={googleToken}
-                role={role}
-                onChangeRole={(newRole) => setRole(newRole)}
-                onDisconnect={handleDisconnectGoogle}
-              />
-            )}
+              {activeTab === 'UserProfile' && (
+                <UserProfileSection
+                  googleUser={googleUser}
+                  googleToken={googleToken}
+                  role={role}
+                  onChangeRole={(newRole) => setRole(newRole)}
+                  onDisconnect={handleDisconnectGoogle}
+                />
+              )}
 
-            {activeTab === 'UserManagement' && role === 'Admin' && (
-              <UserManagementSection
-                role={role}
-                onShowAudit={appendAuditLog}
-              />
-            )}
+              {activeTab === 'UserManagement' && role === 'Admin' && (
+                <UserManagementSection
+                  role={role}
+                  onShowAudit={appendAuditLog}
+                />
+              )}
+            </Suspense>
           </div>
 
           {/* LOWER STATUS FOOTER / TECHNICAL AUDIT CONTROL */}

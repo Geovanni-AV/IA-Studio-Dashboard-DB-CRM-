@@ -905,7 +905,7 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
 
     // Intentar CRM
     try {
-      const resRec = await fetch(`${cleanUrl}/rest/v1/${crmTableEncoded}?select=*`, { headers, method: 'GET' });
+      const resRec = await fetch(`${cleanUrl}/rest/v1/${crmTableEncoded}?select=*&limit=150`, { headers, method: 'GET' });
       if (resRec.ok) {
         recData = await resRec.json();
         crmOk = true;
@@ -996,7 +996,7 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
 
     // Carga robusta con el SDK por tabla
     try {
-      const { data: sdkRec, error: recErr } = await client.from(crmTable).select('*');
+      const { data: sdkRec, error: recErr } = await client.from(crmTable).select('*').limit(150);
       if (recErr) {
         sdkErrorDetails += `CRM: ${recErr.message || JSON.stringify(recErr)}. `;
       } else if (sdkRec) {
@@ -2281,6 +2281,32 @@ export const subscribeToCRMRecords = (url: string, key: string, onUpdate: (paylo
 
   return channel;
 };
+
+/**
+ * FASE 3: Descarga el siguiente bloque de registros CRM para paginación
+ */
+export async function loadMoreCRMRecords(url: string, key: string, offset: number, limit: number = 150) {
+  const client = getSupabaseClient(url, key);
+  if (!client) return { success: false, records: [] };
+
+  try {
+    const { data, error } = await client
+      .from(getResolvedCRMTableName())
+      .select('*')
+      .range(offset, offset + limit - 1); // Rango dinámico (ej. 150 a 299)
+
+    if (error) {
+      console.error('Error al paginar registros CRM:', error);
+      return { success: false, records: [] };
+    }
+
+    // Mapeamos los datos en crudo usando tu algoritmo central
+    return { success: true, records: data.map(mapRawCRMRecord) };
+  } catch (err) {
+    console.error('Excepción de red al paginar CRM:', err);
+    return { success: false, records: [] };
+  }
+}
 
 export const SUPABASE_SQL_INSTRUCTIONS = `-- COPIA Y PEGA ESTE SCRIPT EN EL EDITOR SQL (SQL EDITOR) DE TU PROYECTO SUPABASE
 
