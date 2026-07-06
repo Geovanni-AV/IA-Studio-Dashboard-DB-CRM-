@@ -1403,7 +1403,7 @@ export default function LeadsSection({
         onSave={handleSaveDetailDrawer}
         contacts={contacts}
         dbUsers={dbUsers}
-        kanbanColumns={kanbanColumns}
+        kanbanColumns={getColumnNames(kanbanColumns)}
         role={role}
         onAddContact={onAddContact}
         onResetStagnation={handleResetStagnation}
