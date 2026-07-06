@@ -4,30 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Google AI Studio App</title>
-    <script>
-      (function() {
-        if (window.location.hash) {
-          const hash = window.location.hash.substring(1);
-          const params = new URLSearchParams(hash);
-          const token = params.get('access_token');
-          const state = params.get('state');
-          if (token && state === 'sheets_sync') {
-            try {
-              if (window.opener) {
-                // Send the token back to the parent CRM window
-                window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token: token }, window.location.origin);
-                // Also broadcast using '*' as a backup in case origin comparisons have iframe sandbox differences
-                window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token: token }, '*');
-              }
-            } catch (e) {
-              console.error("Error communicating with parent window:", e);
-            }
-            // Close the OAuth popup immediately before initializing React resources
-            window.close();
-          }
-        }
-      })();
-    </script>
   </head>
   <body>
     <div id="root"></div>

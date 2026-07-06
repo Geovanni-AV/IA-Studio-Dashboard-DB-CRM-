@@ -112,9 +112,9 @@ export default function App() {
   const [activeTab, setActiveTab ] = useState('Dashboard');
   const [pulseNotification, setPulseNotification] = useState(true);
 
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return localStorage.getItem('verse_is_logged_in') === 'true';
-  });
+  const [session, setSession] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const isAuthenticated = !!session;
 
   const [dbUsers, setDbUsers] = useState<UserAccount[]>([]);
   const [userStatus, setUserStatus] = useState<'active' | 'pending' | 'rejected' | 'not_logged_in' | 'loading'>('loading');
@@ -244,106 +244,34 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = (email: string) => {
-    setIsAuthenticated(true);
-    localStorage.setItem('verse_is_logged_in', 'true');
-    const nameStr = email.includes('@') ? email.split('@')[0] : email;
-    const profile = {
-      name: nameStr.charAt(0).toUpperCase() + nameStr.slice(1),
-      email: email,
-      picture: ''
-    };
-    setGoogleUser(profile);
-    localStorage.setItem('verse_google_user', JSON.stringify(profile));
-    showToast(`¡Bienvenido, ${profile.name}! Validando credenciales...`, 'info');
-    appendAuditLog('INICIO SESIÓN', `Usuario inició sesión exitosamente utilizando dirección: ${email}`, email);
-    checkUserAccess(email, profile.name);
-  };
+  // Derived Google User state from Supabase Auth Session
+  const googleUser = session?.user ? {
+    name: session.user.user_metadata?.full_name || session.user.email || '',
+    email: session.user.email || '',
+    picture: session.user.user_metadata?.avatar_url || ''
+  } : null;
 
-  // States for loaders and feedback notifications
-  const [googleUser, setGoogleUser] = useState<{ name: string; email: string; picture: string } | null>(() => {
-    const saved = localStorage.getItem('verse_google_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  // Derived Google Token from Supabase session
+  const googleToken = session?.provider_token || session?.access_token || '';
 
-  const [googleToken, setGoogleToken] = useState<string>(() => {
-    return localStorage.getItem('verse_sheet_token') || '';
-  });
-
-  useEffect(() => {
-    if (googleUser && googleUser.email) {
-      checkUserAccess(googleUser.email, googleUser.name);
-    } else {
-      setUserStatus('not_logged_in');
+  const handleDisconnectGoogle = async () => {
+    const url = (import.meta as any).env.VITE_SUPABASE_URL || "https://iqxwrfjfdvixidsnfwja.supabase.co";
+    const key = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg";
+    const supabase = getSupabaseClient(url, key);
+    
+    if (session?.user?.email) {
+      appendAuditLog('CERRAR SESIÓN', `Usuario cerró sesión de forma segura.`, session.user.email);
     }
-  }, []);
-
-  const fetchGoogleProfile = async (token: string, idToken?: string) => {
-    try {
-      const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const profile = {
-          name: data.name || 'Usuario Google',
-          email: data.email || '',
-          picture: data.picture || ''
-        };
-        setGoogleUser(profile);
-        localStorage.setItem('verse_google_user', JSON.stringify(profile));
-        setIsAuthenticated(true);
-        localStorage.setItem('verse_is_logged_in', 'true');
-        showToast(`¡Conexión Google Exitosa! Bienvenido, ${profile.name}`, 'success');
-        appendAuditLog('INICIO SESIÓN', `Usuario inició sesión de forma segura a través de Google Workspace OAuth (${profile.name}).`, profile.email);
-        
-        // --- VINCULACIÓN CON SUPABASE AUTH VIA ID TOKEN ---
-        const url = localStorage.getItem('verse_supabase_url') || 'https://iqxwrfjfdvixidsnfwja.supabase.co';
-        const key = localStorage.getItem('verse_supabase_key') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg';
-        const finalIdToken = idToken || localStorage.getItem('verse_google_id_token');
-        if (url && key && finalIdToken) {
-          const client = getSupabaseClient(url, key);
-          if (client) {
-            console.log("Iniciando autenticación en Supabase con Google ID Token...");
-            const { data: sbData, error: sbErr } = await client.auth.signInWithIdToken({
-              provider: 'google',
-              token: finalIdToken
-            });
-            if (sbErr) {
-              console.warn("Fallo de signInWithIdToken en Supabase:", sbErr.message);
-            } else {
-              console.log("Sesión de Supabase establecida correctamente:", sbData);
-              showToast("Sesión de base de datos autorizada vía Google", "success");
-            }
-          }
-        }
-        // ---------------------------------------------------
-        
-        // Ejecutar inmediatamente la validación de acceso para bloquear/permitir según base de datos
-        await checkUserAccess(profile.email, profile.name);
-      } else {
-        console.warn('Token inválido o expirado en el API de Google.');
-        appendAuditLog('ERROR', 'Intento de inicio de sesión de Google falló por token inválido o expirado.');
-      }
-    } catch (e: any) {
-      console.error('Error fetching Google profile:', e);
-      appendAuditLog('ERROR', `Error al consultar perfil de Google en inicio de sesión: ${e.message || e}`);
-    }
-  };
-
-  const handleDisconnectGoogle = () => {
-    if (googleUser?.email) {
-      appendAuditLog('CERRAR SESIÓN', `Usuario cerró sesión y se desconectó voluntariamente de los servicios.`, googleUser.email);
-    }
-    setGoogleUser(null);
-    setGoogleToken('');
-    setIsAuthenticated(false);
+    
+    if (supabase) await supabase.auth.signOut();
+    
+    setSession(null);
     setUserStatus('not_logged_in');
     setActiveTab('Dashboard');
     localStorage.removeItem('verse_sheet_token');
     localStorage.removeItem('verse_google_user');
     localStorage.removeItem('verse_is_logged_in');
-    showToast('Sesión de usuario cerrada con éxito y desconectada.', 'info');
+    showToast('Sesión cerrada con éxito.', 'info');
   };
 
   const [isSupabaseLoading, setIsSupabaseLoading] = useState(false);
@@ -557,51 +485,89 @@ export default function App() {
     fetchFromSupabaseOnStart();
   }, []);
 
-  // Capture OAuth Access Token redirect inside Google's auth popup window
+  // Observador de sesión de Supabase Auth
   useEffect(() => {
-    if (window.location.hash) {
-      const hash = window.location.hash.substring(1);
-      const params = new URLSearchParams(hash);
-      const token = params.get('access_token');
-      const idToken = params.get('id_token');
-      const state = params.get('state');
-      if (token && state === 'sheets_sync') {
-        if (window.opener) {
-          window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token, idToken }, window.location.origin);
-          window.close();
-        }
-      }
+    const url = localStorage.getItem('verse_supabase_url') || (import.meta as any).env.VITE_SUPABASE_URL || "https://iqxwrfjfdvixidsnfwja.supabase.co";
+    const key = localStorage.getItem('verse_supabase_key') || (import.meta as any).env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg";
+    const supabase = getSupabaseClient(url, key);
+
+    if (!supabase) {
+      setIsAuthLoading(false);
+      return;
     }
+
+    // Verificar la sesión actual al cargar la página
+    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+      setSession(currentSession);
+      setIsAuthLoading(false);
+      if (currentSession?.user) {
+        const email = currentSession.user.email || '';
+        const name = currentSession.user.user_metadata?.full_name || email;
+        checkUserAccess(email, name);
+      }
+    });
+
+    // Escuchar cambios (login, logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      setSession(currentSession);
+      if (currentSession?.user) {
+        const email = currentSession.user.email || '';
+        const name = currentSession.user.user_metadata?.full_name || email;
+        checkUserAccess(email, name);
+      } else {
+        setUserStatus('not_logged_in');
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Listen to Google login oauth tokens from popup and fetch profile info
+  // Escuchar mensajes de éxito de autenticación desde la ventana emergente (popup)
   useEffect(() => {
-    const handleOAuthMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-
-      if (event.data?.type === 'GOOGLE_SHEETS_TOKEN' && event.data?.token) {
-        const token = event.data.token;
-        const idToken = event.data.idToken;
-        setGoogleToken(token);
-        localStorage.setItem('verse_sheet_token', token);
-        if (idToken) {
-          localStorage.setItem('verse_google_id_token', idToken);
+    const handleSupabaseMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'SUPABASE_AUTH_SUCCESS') {
+        const { accessToken, refreshToken } = event.data;
+        const url = localStorage.getItem('verse_supabase_url') || (import.meta as any).env.VITE_SUPABASE_URL || "https://iqxwrfjfdvixidsnfwja.supabase.co";
+        const key = localStorage.getItem('verse_supabase_key') || (import.meta as any).env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg";
+        const supabase = getSupabaseClient(url, key);
+        if (supabase) {
+          if (accessToken) {
+            supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken || ''
+            }).then(({ data: { session: currentSession }, error }) => {
+              if (error) {
+                console.error("Error setting session from popup:", error);
+                return;
+              }
+              if (currentSession) {
+                setSession(currentSession);
+                setIsAuthLoading(false);
+                if (currentSession.user) {
+                  const email = currentSession.user.email || '';
+                  const name = currentSession.user.user_metadata?.full_name || email;
+                  checkUserAccess(email, name);
+                  showToast("Sesión iniciada con éxito", "success");
+                }
+              }
+            });
+          } else {
+            supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+              setSession(currentSession);
+              setIsAuthLoading(false);
+              if (currentSession?.user) {
+                const email = currentSession.user.email || '';
+                const name = currentSession.user.user_metadata?.full_name || email;
+                checkUserAccess(email, name);
+              }
+            });
+          }
         }
-        fetchGoogleProfile(token, idToken);
       }
     };
-
-    window.addEventListener('message', handleOAuthMessage);
-    return () => window.removeEventListener('message', handleOAuthMessage);
+    window.addEventListener('message', handleSupabaseMessage);
+    return () => window.removeEventListener('message', handleSupabaseMessage);
   }, []);
-
-  // Dynamic fetch Google profile upon startup if token is active
-  useEffect(() => {
-    if (googleToken && !googleUser) {
-      const idToken = localStorage.getItem('verse_google_id_token') || undefined;
-      fetchGoogleProfile(googleToken, idToken);
-    }
-  }, [googleToken, googleUser]);
 
   // --- SINCRONIZACIÓN DE LEADS/TARJETAS EN TIEMPO REAL ---
   useEffect(() => {
@@ -786,12 +752,26 @@ export default function App() {
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     const token = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
     const state = params.get('state');
     if (token && state === 'sheets_sync') {
       try {
-        window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token }, window.location.origin);
+        window.opener.postMessage({ type: 'GOOGLE_SHEETS_TOKEN', token }, '*');
       } catch (err) {
         console.error("Error sending token to opener:", err);
+      }
+      setTimeout(() => {
+        window.close();
+      }, 150);
+    } else {
+      try {
+        window.opener.postMessage({ 
+          type: 'SUPABASE_AUTH_SUCCESS',
+          accessToken: token,
+          refreshToken: refreshToken
+        }, '*');
+      } catch (err) {
+        console.error("Error sending success message to opener:", err);
       }
       setTimeout(() => {
         window.close();
@@ -806,8 +786,18 @@ export default function App() {
     );
   }
 
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="w-10 h-10 border-2 border-t-transparent border-indigo-500 rounded-full animate-spin mb-4"></div>
+        <h2 className="text-base font-bold mb-1">Cargando Sesión de Usuario...</h2>
+        <p className="text-xs text-slate-400">Restableciendo conexión segura con Verse Connect.</p>
+      </div>
+    );
+  }
+
   if (!isAuthenticated || !googleUser) {
-    return <SignInScreen onLoginSuccess={handleLoginSuccess} />;
+    return <SignInScreen />;
   }
 
   if (userStatus === 'loading') {

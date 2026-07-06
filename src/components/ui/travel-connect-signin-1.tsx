@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from "react";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { getSupabaseClient } from "../../supabaseService";
 
 // Helper function to merge class names
 const cn = (...classes: string[]) => {
@@ -247,37 +248,57 @@ const DotMap = () => {
 };
 
 interface SignInCardProps {
-  onLoginSuccess: (email: string) => void;
+  onLoginSuccess?: (email: string) => void;
 }
 
-  const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
+const SignInCard = ({ onLoginSuccess }: SignInCardProps) => {
   const [isHovered, setIsHovered] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const clientId = '769103708552-r9ljosbra9hp8bk4l5sgm8h3j4mt77ii.apps.googleusercontent.com';
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     try {
-      const redirectUri = window.location.origin;
-      const scope = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid';
-      const nonce = Math.random().toString(36).substring(2, 15);
-      const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token%20id_token&scope=${encodeURIComponent(scope)}&state=sheets_sync&nonce=${nonce}`;
+      // Obtenemos las llaves
+      const url = localStorage.getItem('verse_supabase_url') || (import.meta as any).env.VITE_SUPABASE_URL || '';
+      const key = localStorage.getItem('verse_supabase_key') || (import.meta as any).env.VITE_SUPABASE_ANON_KEY || '';
       
-      const width = 600;
-      const height = 650;
-      const left = window.screen.width / 2 - width / 2;
-      const top = window.screen.height / 2 - height / 2;
-      
-      const popup = window.open(
-        oauthUrl,
-        'google_oauth_popup',
-        `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
-      );
-      
-      if (!popup) {
-        setErrorMsg('El navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes en su navegador para poder iniciar sesión con Google.');
+      const supabase = getSupabaseClient(url, key);
+
+      if (!supabase) {
+        setErrorMsg("Error: Cliente Supabase no detectado.");
+        return;
       }
+
+      // Iniciamos sesión pidiendo la URL pero SIN redirigir el iframe
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin, 
+          skipBrowserRedirect: true, // 🚨 ESTA ES LA CLAVE: Evita que Google bloquee el iframe
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
+        }
+      });
+
+      if (error) throw error;
+      
+      // Si nos dio la URL, la abrimos en una ventana emergente (popup)
+      if (data?.url) {
+        const width = 600;
+        const height = 650;
+        const left = window.screen.width / 2 - width / 2;
+        const top = window.screen.height / 2 - height / 2;
+        
+        window.open(
+          data.url,
+          'google_oauth_popup',
+          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
+        );
+      }
+      
     } catch (e: any) {
-      setErrorMsg(`Error al abrir ventana de Google Auth: ${e.message || e}`);
+      setErrorMsg(`Error al iniciar sesión: ${e.message || e}`);
     }
   };
   
