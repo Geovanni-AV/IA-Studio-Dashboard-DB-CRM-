@@ -114,3 +114,8 @@ export interface PurchaseOrder {
   proyecto: string;        // project name/description
   folioRefCRM: string;     // referencing CRM Record folio
 }
+
+export interface ColumnConfig {
+  name: string;
+  require_confirm: boolean;
+}

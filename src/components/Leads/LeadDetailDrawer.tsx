@@ -35,6 +35,7 @@ export default function LeadDetailDrawer({
   const [newFollowupNotes, setNewFollowupNotes] = useState('');
   const [newFollowupMethod, setNewFollowupMethod] = useState<'Llamada Telefónica' | 'Correo Electrónico' | 'Revisión Técnica' | 'Visita a Sitio' | 'Minuta de Junta'>('Llamada Telefónica');
   const [newSubtask, setNewSubtask] = useState('');
+  const [resetSuccess, setResetSuccess] = useState(false);
 
   // Estados para creación rápida de contacto
   const [isAddingContact, setIsAddingContact] = useState(false);
@@ -47,18 +48,17 @@ export default function LeadDetailDrawer({
   const handleResetDaysInModal = (e?: React.MouseEvent) => {
     if (e) e.preventDefault();
     if (!draft) return;
-    if (confirm('¿Restablecer el contador de días estancados para este expediente a 0 días?')) {
-      const todayString = getMexicoCityDateString();
-      const updatedDraft = {
-        ...draft,
-        fecha_cambio_etapa: todayString
-      };
-      setDraft(updatedDraft);
-      if (onResetStagnation) {
-        onResetStagnation(updatedDraft);
-      }
-      alert("Contador de días reiniciado a 0 exitosamente en la Base de Datos.");
+    const todayString = getMexicoCityDateString();
+    const updatedDraft = {
+      ...draft,
+      fecha_cambio_etapa: todayString
+    };
+    setDraft(updatedDraft);
+    if (onResetStagnation) {
+      onResetStagnation(updatedDraft);
     }
+    setResetSuccess(true);
+    setTimeout(() => setResetSuccess(false), 3000);
   };
 
   const handleCreateContactInModal = (e: React.FormEvent) => {
@@ -485,25 +485,29 @@ export default function LeadDetailDrawer({
                         <label className="block text-[10px] font-bold text-slate-400 uppercase" title="Días límite antes de marcar como estancado">
                           Alerta Estancamiento
                         </label>
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200">
+                        <div className={`flex items-center gap-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-md border transition-all duration-300 ${
+                          resetSuccess 
+                            ? 'text-emerald-700 bg-emerald-50 border-emerald-200 animate-pulse' 
+                            : 'text-amber-600 bg-amber-50 border-amber-200'
+                        }`}>
                           <span>
-                            ⏱️ {(() => {
+                            {resetSuccess ? '✓ ¡Reiniciado!' : `⏱️ ${(() => {
                               const dateStr = draft.fecha_cambio_etapa || draft.fecha_registro;
                               if (!dateStr) return 0;
                               try {
-                                const today = new Date();
-                                const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                                const todayString = getMexicoCityDateString();
                                 const d1 = new Date(todayString);
-                                const d2 = new Date(dateStr.split('T')[0]);
-                                const diffTime = Math.abs(d1.getTime() - d2.getTime());
+                                const dateOnlyStr = dateStr.trim().substring(0, 10);
+                                const d2 = new Date(dateOnlyStr);
+                                const diffTime = d1.getTime() - d2.getTime();
                                 const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                                return diffDays >= 0 ? diffDays : 0;
+                                return isNaN(diffDays) || diffDays < 0 ? 0 : diffDays;
                               } catch {
                                 return 0;
                               }
-                            })()}d
+                            })()}d`}
                           </span>
-                          {role !== 'Solo Lectura' && (
+                          {role !== 'Solo Lectura' && !resetSuccess && (
                             <button
                               type="button"
                               onClick={handleResetDaysInModal}

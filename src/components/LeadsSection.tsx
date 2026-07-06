@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount } from '../types';
+import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount, ColumnConfig } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
 import { toValidUUID, getCRMSettings, updateCRMSettings, subscribeToCRMSettings } from '../supabaseService';
 import { safeJsonParse, safeRound } from '../utils/coreUtils';
@@ -12,12 +12,17 @@ import {
   Activity,
   Check,
   Settings,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  Save
 } from 'lucide-react';
 
 import KanbanBoard, { KanbanMeta } from './Leads/KanbanBoard';
 import LeadsTable from './Leads/LeadsTable';
 import LeadDetailDrawer from './Leads/LeadDetailDrawer';
+import KanbanConfigModal from './Leads/KanbanConfigModal';
 
 interface LeadsSectionProps {
   records: CRMRecord[];
@@ -89,11 +94,32 @@ export default function LeadsSection({
 
   const [settingsId, setSettingsId] = useState<string | null>(null);
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
-  const lastKnownServerStateRef = useRef<{ columns: string[]; wip: Record<string, number> } | null>(null);
+  const lastKnownServerStateRef = useRef<{ columns: any[]; wip: Record<string, number> } | null>(null);
 
-  const [kanbanColumns, setKanbanColumns] = useState<string[]>(() => {
+  const healColumns = (cols: any[]): ColumnConfig[] => {
+    if (!Array.isArray(cols)) return [];
+    return cols.map(col => {
+      if (typeof col === 'string') {
+        return {
+          name: col,
+          require_confirm: col.toLowerCase().includes('cerrado') || col.toLowerCase().includes('ganado')
+        };
+      }
+      return {
+        name: col.name || '',
+        require_confirm: !!col.require_confirm
+      };
+    });
+  };
+
+  const [kanbanColumns, setKanbanColumns] = useState<ColumnConfig[]>(() => {
     const saved = localStorage.getItem('verse_crm_kanban_columns');
-    return saved ? JSON.parse(saved) : ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
+    if (saved) {
+      try {
+        return healColumns(JSON.parse(saved));
+      } catch (e) {}
+    }
+    return healColumns(['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido']);
   });
 
   const [columnConfigOpen, setColumnConfigOpen] = useState(false);
@@ -139,11 +165,11 @@ export default function LeadsSection({
 
         if (settings) {
           lastKnownServerStateRef.current = {
-            columns: settings.kanban_columns || [],
+            columns: healColumns(settings.kanban_columns || []),
             wip: settings.wip_limits || {}
           };
           setSettingsId(settings.id);
-          setKanbanColumns(settings.kanban_columns);
+          setKanbanColumns(healColumns(settings.kanban_columns));
           setWipLimits(settings.wip_limits || {});
         } else {
           const initialColumns = ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
@@ -156,7 +182,7 @@ export default function LeadsSection({
             'Cerrado Perdido': 99,
           };
           lastKnownServerStateRef.current = {
-            columns: initialColumns,
+            columns: healColumns(initialColumns),
             wip: initialWip
           };
           const success = await updateCRMSettings({
@@ -168,11 +194,11 @@ export default function LeadsSection({
             const reSettings = await getCRMSettings(url, key);
             if (reSettings && active) {
               lastKnownServerStateRef.current = {
-                columns: reSettings.kanban_columns || [],
+                columns: healColumns(reSettings.kanban_columns || []),
                 wip: reSettings.wip_limits || {}
               };
               setSettingsId(reSettings.id);
-              setKanbanColumns(reSettings.kanban_columns);
+              setKanbanColumns(healColumns(reSettings.kanban_columns));
               setWipLimits(reSettings.wip_limits || {});
             }
           }
@@ -195,12 +221,12 @@ export default function LeadsSection({
         if (payload.new && (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT')) {
           if (active) {
             lastKnownServerStateRef.current = {
-              columns: payload.new.kanban_columns || [],
+              columns: healColumns(payload.new.kanban_columns || []),
               wip: payload.new.wip_limits || {}
             };
             setIsSettingsLoaded(false);
             setSettingsId(payload.new.id);
-            setKanbanColumns(payload.new.kanban_columns || []);
+            setKanbanColumns(healColumns(payload.new.kanban_columns || []));
             setWipLimits(payload.new.wip_limits || {});
             setTimeout(() => {
               if (active) setIsSettingsLoaded(true);
@@ -339,9 +365,14 @@ export default function LeadsSection({
     }
   }, [activeDrawerRecordId, records, kanbanMeta]);
 
+  const getColumnNames = (cols: (string | ColumnConfig)[]): string[] => {
+    return cols.map(c => typeof c === 'string' ? c : c.name);
+  };
+
   // Helper to map stage names to active custom columns
   const resolveStageName = (defaultStage: string): string => {
-    if (kanbanColumns.includes(defaultStage)) return defaultStage;
+    const colNames = getColumnNames(kanbanColumns);
+    if (colNames.includes(defaultStage)) return defaultStage;
 
     const defaultIndexMap: Record<string, number> = {
       'Nuevo': 0,
@@ -353,27 +384,28 @@ export default function LeadsSection({
     };
 
     const idx = defaultIndexMap[defaultStage];
-    if (idx !== undefined && kanbanColumns[idx]) {
-      return kanbanColumns[idx];
+    if (idx !== undefined && colNames[idx]) {
+      return colNames[idx];
     }
 
     if (defaultStage === 'Cerrado Ganado') {
-      const found = kanbanColumns.find(c => c.toLowerCase().includes('ganado'));
+      const found = colNames.find(c => c.toLowerCase().includes('ganado'));
       if (found) return found;
     }
     if (defaultStage === 'Cerrado Perdido') {
-      const found = kanbanColumns.find(c => c.toLowerCase().includes('perdido'));
+      const found = colNames.find(c => c.toLowerCase().includes('perdido'));
       if (found) return found;
     }
 
-    return kanbanColumns[0] || defaultStage;
+    return colNames[0] || defaultStage;
   };
 
   const getDefaultStageForCustom = (customStage: string): string => {
     const defaultStages = ['Nuevo', 'Contactado', 'Cotizado', 'Negociación', 'Cerrado Ganado', 'Cerrado Perdido'];
     if (defaultStages.includes(customStage)) return customStage;
 
-    const idx = kanbanColumns.indexOf(customStage);
+    const colNames = getColumnNames(kanbanColumns);
+    const idx = colNames.indexOf(customStage);
     if (idx !== -1 && idx < defaultStages.length) {
       return defaultStages[idx];
     }
@@ -393,12 +425,13 @@ export default function LeadsSection({
     if (records.length > 0) {
       let anyChange = false;
       const updatedMeta = { ...kanbanMeta };
+      const colNames = getColumnNames(kanbanColumns);
 
       records.forEach((r, idx) => {
         const currentMeta = updatedMeta[r.id];
         let defaultTarget: string | null = null;
 
-        if (r.etapa && kanbanColumns.includes(r.etapa)) {
+        if (r.etapa && colNames.includes(r.etapa)) {
           defaultTarget = r.etapa;
         } else if (r.estado_proyecto === 'Cerrado Ganado') {
           defaultTarget = 'Cerrado Ganado';
@@ -703,13 +736,15 @@ export default function LeadsSection({
   const getDaysInStage = (dateEntered: string | null | undefined) => {
     if (!dateEntered) return 0;
     try {
-      const today = new Date();
-      const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const todayString = getMexicoCityDateString();
       const d1 = new Date(todayString);
-      const d2 = new Date(dateEntered.split('T')[0]);
-      const diffTime = Math.abs(d1.getTime() - d2.getTime());
+      
+      const dateOnlyStr = dateEntered.trim().substring(0, 10);
+      const d2 = new Date(dateOnlyStr);
+      
+      const diffTime = d1.getTime() - d2.getTime();
       const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-      return isNaN(diffDays) ? 0 : diffDays;
+      return isNaN(diffDays) || diffDays < 0 ? 0 : diffDays;
     } catch (e) {
       return 0;
     }
@@ -852,6 +887,22 @@ export default function LeadsSection({
     const sourceStage = currentMeta?.stage || 'Nuevo';
 
     const defaultTarget = getDefaultStageForCustom(targetStage);
+
+    // Check if target stage requires confirmation
+    const colConfig = kanbanColumns.find(c => {
+      const colName = typeof c === 'string' ? c : c.name;
+      return colName.trim().toLowerCase() === targetStage.trim().toLowerCase();
+    });
+    const requireConfirm = colConfig && typeof colConfig === 'object'
+      ? !!colConfig.require_confirm
+      : false;
+
+    if (sourceStage !== targetStage && requireConfirm && !(defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
+      if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
+        return;
+      }
+    }
+
     if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
       setPendingDrag({ recordId, targetStage, sourceStage });
       setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
@@ -890,6 +941,22 @@ export default function LeadsSection({
     if (!sourceCard) return;
 
     const defaultTarget = getDefaultStageForCustom(targetStage);
+
+    // Check if target stage requires confirmation
+    const colConfig = kanbanColumns.find(c => {
+      const colName = typeof c === 'string' ? c : c.name;
+      return colName.trim().toLowerCase() === targetStage.trim().toLowerCase();
+    });
+    const requireConfirm = colConfig && typeof colConfig === 'object'
+      ? !!colConfig.require_confirm
+      : false;
+
+    if (sourceStage !== targetStage && requireConfirm && !(defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
+      if (!confirm(`¿Estás seguro de que deseas mover este proyecto a la etapa "${targetStage}"?`)) {
+        return;
+      }
+    }
+
     if (sourceStage !== targetStage && (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido')) {
       setPendingDrag({ recordId, targetStage, sourceStage });
       setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
@@ -908,16 +975,21 @@ export default function LeadsSection({
     const updatedRecord = { ...record, fecha_cambio_etapa: todayString };
     
     setKanbanMeta(prev => {
-      if (prev[record.id]) {
-        return {
-          ...prev,
-          [record.id]: {
-            ...prev[record.id],
-            dateEnteredStage: todayString
-          }
-        };
-      }
-      return prev;
+      const currentMeta = prev[record.id] || {
+        stage: record.etapa || 'Nuevo',
+        dateEnteredStage: todayString,
+        responsable: record.responsable || '',
+        subtasks: Array.isArray(record.__tareas) ? record.__tareas : [],
+        tags: [],
+        stagnation_days_limit: record.stagnation_days_limit !== undefined && record.stagnation_days_limit !== null ? Number(record.stagnation_days_limit) : 5
+      };
+      return {
+        ...prev,
+        [record.id]: {
+          ...currentMeta,
+          dateEnteredStage: todayString
+        }
+      };
     });
 
     onUpdateRecord(updatedRecord); // Dispara el guardado en BD
@@ -1231,6 +1303,80 @@ export default function LeadsSection({
     setActiveDrawerRecordId(null);
   };
 
+  const renderColumnConfigModal = () => {
+    return (
+      <KanbanConfigModal
+        isOpen={columnConfigOpen}
+        currentColumns={kanbanColumns}
+        onClose={() => setColumnConfigOpen(false)}
+        onSave={(newCols) => {
+          // Identify deleted columns to reassign their leads
+          const newColNames = newCols.map(c => c.name);
+          const oldColNames = kanbanColumns.map(c => typeof c === 'string' ? c : c.name);
+          
+          const deletedColumns = oldColNames.filter(c => !newColNames.includes(c));
+          const updatedMeta = { ...kanbanMeta };
+          let reassignedCount = 0;
+
+          if (deletedColumns.length > 0) {
+            records.forEach(r => {
+              const currentStage = updatedMeta[r.id]?.stage;
+              if (currentStage && deletedColumns.includes(currentStage)) {
+                // Reassign to the first available column in the new layout
+                updatedMeta[r.id] = {
+                  ...updatedMeta[r.id],
+                  stage: newColNames[0],
+                  dateEnteredStage: getMexicoCityDateString()
+                };
+                reassignedCount++;
+              }
+            });
+          }
+
+          // Also handle renamed columns' leads mapping
+          oldColNames.forEach((oldCol, idx) => {
+            const newCol = newColNames[idx];
+            if (newCol && oldCol !== newCol && newColNames.includes(newCol)) {
+              // If it was renamed in place (same index)
+              records.forEach(r => {
+                if (updatedMeta[r.id]?.stage === oldCol) {
+                  updatedMeta[r.id] = {
+                    ...updatedMeta[r.id],
+                    stage: newCol
+                  };
+                }
+              });
+            }
+          });
+
+          setKanbanColumns(newCols);
+          
+          // Sync WIP limits for any new columns (default to 5 if not exists)
+          const newWipLimits = { ...wipLimits };
+          newCols.forEach(col => {
+            if (newWipLimits[col.name] === undefined) {
+              newWipLimits[col.name] = 5;
+            }
+          });
+          // Remove limits for deleted columns
+          deletedColumns.forEach(c => {
+            delete newWipLimits[c];
+          });
+          setWipLimits(newWipLimits);
+
+          if (reassignedCount > 0 || deletedColumns.length > 0) {
+            setKanbanMeta(updatedMeta);
+            localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(updatedMeta));
+          }
+          
+          onShowAudit('CONFIGURACIÓN', `Actualizó la estructura del tablero Kanban (${newCols.length} columnas). ${reassignedCount > 0 ? `Reasignó ${reassignedCount} leads de columnas eliminadas.` : ''}`);
+          alert("¡Estructura del Kanban guardada y sincronizada para todos los usuarios!");
+          setColumnConfigOpen(false);
+        }}
+      />
+    );
+  };
+
   const renderDrawerLateralPanel = () => {
     const activeRecord = records.find(r => r.id === activeDrawerRecordId) || null;
     return (
@@ -1400,7 +1546,7 @@ export default function LeadsSection({
           exchangeRate={exchangeRate}
           kanbanMeta={kanbanMeta}
           setKanbanMeta={setKanbanMeta}
-          kanbanColumns={kanbanColumns}
+          kanbanColumns={getColumnNames(kanbanColumns)}
           onUpdateRecord={onUpdateRecord}
           onDeleteRecord={onDeleteRecord}
           setActiveDrawerRecordId={setActiveDrawerRecordId}
@@ -1420,8 +1566,17 @@ export default function LeadsSection({
           dbUsers={dbUsers}
           kanbanMeta={kanbanMeta}
           setKanbanMeta={setKanbanMeta}
-          kanbanColumns={kanbanColumns}
-          setKanbanColumns={setKanbanColumns}
+          kanbanColumns={getColumnNames(kanbanColumns)}
+          setKanbanColumns={(newCols) => {
+            if (typeof newCols === 'function') {
+              setKanbanColumns(prev => {
+                const evaluated = (newCols as any)(getColumnNames(prev));
+                return healColumns(evaluated);
+              });
+            } else if (Array.isArray(newCols)) {
+              setKanbanColumns(healColumns(newCols));
+            }
+          }}
           wipLimits={wipLimits}
           setWipLimits={setWipLimits}
           onUpdateRecord={onUpdateRecord}
@@ -1453,6 +1608,7 @@ export default function LeadsSection({
 
       {renderDrawerLateralPanel()}
       {renderConfirmationCloseModal()}
+      {renderColumnConfigModal()}
 
       {/* MODAL: DETAIL WINDOW */}
       {pdfPromptOpen && pdfPromptRecord && createPortal(

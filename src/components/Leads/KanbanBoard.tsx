@@ -104,7 +104,7 @@ const KanbanCardItem = React.memo(function KanbanCardItem({
   onResetStagnation
 }: KanbanCardItemProps) {
   const [isTermoOpen, setIsTermoOpen] = useState(false);
-  const days = getDaysInStage(card.fecha_cambio_etapa || card.fecha_registro || '');
+  const days = getDaysInStage(meta.dateEnteredStage || card.fecha_cambio_etapa || card.fecha_registro || '');
   
   const getDaysSemaphore = (st: string, d: number) => {
     const thresh = stageThresholds[st] || { warn: 5, critical: 10 };
@@ -514,8 +514,8 @@ export default function KanbanBoard({
         cards = [...cards].sort((a,b) => (b.total_subtotal_cotizacion || 0) - (a.total_subtotal_cotizacion || 0));
       } else if (sortType === 'antiguedad') {
         cards = [...cards].sort((a,b) => {
-          const daysA = getDaysInStage(a.fecha_cambio_etapa || a.fecha_registro || '');
-          const daysB = getDaysInStage(b.fecha_cambio_etapa || b.fecha_registro || '');
+          const daysA = getDaysInStage(kanbanMeta[a.id]?.dateEnteredStage || a.fecha_cambio_etapa || a.fecha_registro || '');
+          const daysB = getDaysInStage(kanbanMeta[b.id]?.dateEnteredStage || b.fecha_cambio_etapa || b.fecha_registro || '');
           return daysB - daysA;
         });
       } else if (sortType === 'responsable') {
@@ -539,7 +539,7 @@ export default function KanbanBoard({
       const limit = wipLimits[stage] || 99;
       const isOverWip = cards.length > limit;
 
-      const totalDays = cards.reduce((acc, r) => acc + getDaysInStage(r.fecha_cambio_etapa || r.fecha_registro || ''), 0);
+      const totalDays = cards.reduce((acc, r) => acc + getDaysInStage(kanbanMeta[r.id]?.dateEnteredStage || r.fecha_cambio_etapa || r.fecha_registro || ''), 0);
       const avgDays = cards.length > 0 ? (totalDays / cards.length).toFixed(1) : '0';
 
       return {
