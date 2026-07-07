@@ -256,17 +256,37 @@ export async function probeTables(url: string, key: string, forceReset = false) 
   }
 }
 
+export async function teardownSupabaseClient(): Promise<void> {
+  if (cachedClient) {
+    try {
+      console.log("🧹 Desconectando de forma segura canales y listeners del cliente Supabase previo...");
+      // 1. Desvincular de forma masiva los hilos de WebSockets activos en el pool
+      await cachedClient.removeAllChannels();
+      // 2. Limpiar listeners globales de estado de autenticación
+      const { data: { subscription } } = cachedClient.auth.onAuthStateChange(() => {});
+      subscription?.unsubscribe();
+    } catch (e) {
+      console.warn("Advertencia controlada durante el desmontaje de Supabase:", e);
+    }
+    cachedClient = null;
+  }
+}
+
 export function getSupabaseClient(url: string, key: string): SupabaseClient | null {
   if (!url || !key) return null;
-  let cleanUrl = url.trim();
-  if (cleanUrl.endsWith('/')) {
-    cleanUrl = cleanUrl.slice(0, -1);
-  }
+  const cleanUrl = url.trim().replace(/\/$/, '');
   const cleanKey = key.trim();
 
-  // Return cached client if config has not changed
+  // Si la configuración coincide exactamente, reutilizamos la instancia en caché
   if (cachedClient && cachedUrl === cleanUrl && cachedKey === cleanKey) {
     return cachedClient;
+  }
+
+  // 🛡️ CORRECCIÓN MEMORY LEAK: Si las credenciales cambiaron (Sandbox/Prod), forzamos la purga masiva
+  if (cachedClient) {
+    console.warn("⚠️ Detectado cambio de credenciales en caliente. Forzando purga de conexiones viejas.");
+    cachedClient.removeAllChannels();
+    cachedClient = null;
   }
 
   try {
@@ -1296,9 +1316,18 @@ export async function pushCRMRecordToSupabase(
     const hardware = (rawHw === null || rawHw === undefined || String(rawHw).trim() === '') ? null : Number(rawHw);
     const servicios = (rawServ === null || rawServ === undefined || String(rawServ).trim() === '') ? null : Number(rawServ);
 
-    const subtotal = (hardware === null && servicios === null) ? null : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
-    const iva = 0;
-    const general = subtotal;
+    // ENFOQUE ADAPTATIVO: Preservamos íntegramente los cálculos legítimos enviados por la aplicación (IVA 16% e Importe Neto)
+    const subtotal = record.total_subtotal_cotizacion !== null && record.total_subtotal_cotizacion !== undefined
+      ? Number(record.total_subtotal_cotizacion)
+      : ((hardware !== null ? hardware : 0) + (servicios !== null ? servicios : 0));
+      
+    const iva = record.total_iva_cotizacion !== null && record.total_iva_cotizacion !== undefined 
+      ? Number(record.total_iva_cotizacion) 
+      : 0;
+      
+    const general = record.total_general_cotizacion !== null && record.total_general_cotizacion !== undefined 
+      ? Number(record.total_general_cotizacion) 
+      : subtotal + iva;
 
     const validUUID = toValidUUID(record.id);
 
@@ -2603,3 +2632,110 @@ create policy "Permiso escritura libre" on crm_settings for insert with check (t
 create policy "Permiso edicion libre" on crm_settings for update using (true);
 create policy "Permiso borrado libre" on crm_settings for delete using (true);
 `;
+
+// ==========================================
+// MOTOR DE PRESENCIA GLOBAL Y BLOQUEOS (FASE 4)
+// ==========================================
+
+/**
+ * Suscribe la sesión de la pestaña actual al canal de presencia global.
+ * Soporta de forma nativa múltiples pestañas del mismo usuario sin pisar estados.
+ */
+export function subscribeToGlobalPresence(
+  client: SupabaseClient,
+  user: { name: string; email: string },
+  onSync: (locks: Record<string, any>) => void
+) {
+  // ID determinista y exclusivo por pestaña del navegador
+  const tabId = crypto.randomUUID(); 
+  
+  const room = client.channel('crm_global_presence', {
+    config: { presence: { key: tabId } }
+  });
+
+  // Escucha universal ante entradas, salidas o mutaciones de foco comercial
+  room.on('presence', { event: 'sync' }, () => {
+    const state = room.presenceState();
+    const currentLocks: Record<string, any> = {};
+    
+    // Iteramos sobre todos los hilos de conexión de la sala distribuida
+    for (const [key, presences] of Object.entries(state)) {
+      // Evaluamos el arreglo completo de presencias bajo este socket para evitar omisiones
+      presences.forEach((active: any) => {
+        if (active.editingRecordId) {
+          currentLocks[active.editingRecordId] = {
+            name: active.name,
+            email: active.email,
+            timestamp: active.timestamp,
+            tabId: key
+          };
+        }
+      });
+    }
+    // Despachamos el mapa consolidado de bloqueos directo al estado de React
+    onSync(currentLocks);
+  });
+
+  room.subscribe(async (status) => {
+    if (status === 'SUBSCRIBED') {
+      // Anunciamos la entrada en vivo (online) sin capturar ningún registro inicialmente
+      await room.track({
+        name: user.name,
+        email: user.email,
+        editingRecordId: null,
+        onlineAt: new Date().toISOString()
+      });
+    }
+  });
+
+  return room;
+}
+
+/**
+ * Actualiza el estado de presencia de la pestaña actual para tomar o liberar un expediente.
+ */
+export async function setEditingRecord(room: any, recordId: string | null, user: { name: string; email: string }) {
+  if (!room) return;
+  // Transmitimos en caliente el ID del Lead abierto (o null si el vendedor cerró la vista)
+  await room.track({
+    name: user.name,
+    email: user.email,
+    editingRecordId: recordId,
+    timestamp: new Date().toISOString()
+  });
+}
+
+// ==========================================
+// MOTOR DE ESCUCHA EN TIEMPO REAL (FASE 5)
+// ==========================================
+
+/**
+ * Establece una suscripción universal y compartida a eventos de PostgreSQL.
+ * Previene el agotamiento de cuotas (Channel Exhaustion) mediante multiplexación de sockets.
+ */
+export function subscribeToTableRealtime(
+  client: any,
+  tableName: string,
+  onEvent: (payload: any) => void
+) {
+  if (!client || !tableName) return null;
+
+  // 🛡️ CANAL DETERMINISTA: ID fijo por tabla para reutilización eficiente de canales concurrentes
+  const channelId = `room_realtime_public_${tableName.toLowerCase().replace(/[\s-]/g, '_')}`;
+
+  const channel = client
+    .channel(channelId)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: tableName },
+      (payload: any) => {
+        console.log(`📡 [Realtime Centralizado] Mutación detectada en tabla "${tableName}":`, payload);
+        onEvent(payload);
+      }
+    )
+    .subscribe();
+
+  return channel;
+}
+
+

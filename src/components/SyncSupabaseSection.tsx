@@ -84,7 +84,7 @@ export default function SyncSupabaseSection({
     };
   }, [currentUserEmail]);
 
-  const isInfraAdmin = currentUserEmail.toLowerCase() === 'geovanni@verse-technology.com';
+  const isInfraAdmin = role === 'Admin';
 
   // Config fields
   const [supabaseUrl, setSupabaseUrl] = useState(() => {
@@ -281,7 +281,7 @@ export default function SyncSupabaseSection({
 
   const handleTestConnection = async () => {
     if (!isInfraAdmin) {
-      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede comprobar la conexión con la base de datos Supabase.");
+      alert("🔒 Acción restringida: Solo un usuario con rol de Administrador ('Admin') puede comprobar la conexión con la base de datos Supabase.");
       return;
     }
 
@@ -348,12 +348,7 @@ export default function SyncSupabaseSection({
 
   const handlePullFromSupabase = async () => {
     if (!isInfraAdmin) {
-      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede importar datos activos desde el puente de Supabase.");
-      return;
-    }
-
-    if (role === 'Solo Lectura') {
-      alert(`Acceso denegado: Tu perfil "${role}" no tiene privilegios para realizar sincronizaciones de bajada.`);
+      alert("🔒 Acción restringida: Solo un usuario con rol de Administrador ('Admin') puede importar datos activos desde el puente de Supabase.");
       return;
     }
 
@@ -404,12 +399,7 @@ export default function SyncSupabaseSection({
 
   const handlePushToSupabase = async () => {
     if (!isInfraAdmin) {
-      alert("🔒 Acción restringida: Solo el usuario titular de la infraestructura (geovanni@verse-technology.com) puede exportar datos activos hacia el puente de Supabase.");
-      return;
-    }
-
-    if (role === 'Solo Lectura') {
-      alert(`Acceso denegado: Tu perfil "${role}" no tiene privilegios para realizar sincronizaciones de subida.`);
+      alert("🔒 Acción restringida: Solo un usuario con rol de Administrador ('Admin') puede exportar datos activos hacia el puente de Supabase.");
       return;
     }
 
@@ -486,7 +476,7 @@ export default function SyncSupabaseSection({
           <div className="text-xs space-y-1">
             <p className="font-bold">Modo de Visualización Autorizado (Solo Lectura - Puente Cloud)</p>
             <p className="leading-relaxed font-medium">
-              Panel de control de base de datos relacional integrado. Solo el Ingeniero Titular de infraestructura (<strong className="font-bold text-slate-900">geovanni@verse-technology.com</strong>) tiene facultades técnicas para testear configuraciones, editar secretos de API, re-establecer esquemas o detonar cargas/descargas en esta ventana.
+              Panel de control de base de datos relacional integrado. Solo los usuarios con rol de Administrador (<strong className="font-bold text-slate-900">Admin</strong>) tienen facultades técnicas para testear configuraciones, editar secretos de API, re-establecer esquemas o detonar cargas/descargas en esta ventana.
             </p>
           </div>
         </div>
@@ -531,7 +521,7 @@ export default function SyncSupabaseSection({
                   disabled={!isInfraAdmin}
                   onChange={(e) => {
                     if (!isInfraAdmin) {
-                      alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización de Supabase.");
+                      alert("🔒 Modificación restringida: Solo un usuario con rol de Administrador ('Admin') puede editar las configuraciones de sincronización de Supabase.");
                       return;
                     }
                     setSupabaseUrl(e.target.value);
@@ -555,7 +545,7 @@ export default function SyncSupabaseSection({
                     disabled={!isInfraAdmin}
                     onChange={(e) => {
                       if (!isInfraAdmin) {
-                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede editar las configuraciones de sincronización de Supabase.");
+                        alert("🔒 Modificación restringida: Solo un usuario con rol de Administrador ('Admin') puede editar las configuraciones de sincronización de Supabase.");
                         return;
                       }
                       setSupabaseKey(e.target.value);
@@ -588,7 +578,7 @@ export default function SyncSupabaseSection({
                     disabled={!isInfraAdmin}
                     onChange={(e) => {
                       if (!isInfraAdmin) {
-                        alert("🔒 Modificación restringida: Solo el usuario titular (geovanni@verse-technology.com) puede habilitar/deshabilitar la sincronización automática de Supabase.");
+                        alert("🔒 Modificación restringida: Solo un usuario con rol de Administrador ('Admin') puede habilitar/deshabilitar la sincronización automática de Supabase.");
                         return;
                       }
                       setAutoSync(e.target.checked);

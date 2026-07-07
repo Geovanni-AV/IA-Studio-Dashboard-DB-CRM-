@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { CRMRecord, Contact, UserAccount, FollowupEntry } from '../../types';
 import { getMexicoCityDateString } from '../../dateUtils';
-import { X, Trash2, Plus, FileText, Trophy, Flame, Zap, Snowflake, RefreshCw } from 'lucide-react';
+import { X, Trash2, Plus, FileText, Trophy, Flame, Zap, Snowflake, RefreshCw, Lock } from 'lucide-react';
+import { usePresence } from '../../contexts/PresenceContext';
 
 interface LeadDetailDrawerProps {
   isOpen: boolean;
@@ -30,8 +31,26 @@ export default function LeadDetailDrawer({
   onResetStagnation
 }: LeadDetailDrawerProps) {
   
+  const { activeLocks, currentUserEmail, setEditingRecordId } = usePresence();
+  
   // Estado borrador para no mutar los datos reales hasta dar "Guardar"
   const [draft, setDraft] = useState<CRMRecord | null>(null);
+
+  const currentLock = draft?.id ? activeLocks[draft.id] : null;
+  const isLockedByOther = !!(currentLock && currentLock.email !== currentUserEmail);
+  const isReadOnly = role === 'Solo Lectura' || isLockedByOther;
+
+  // 🛡️ Notificar inicio/fin de edición sobre el expediente activo
+  useEffect(() => {
+    if (isOpen && draft?.id) {
+      setEditingRecordId(draft.id);
+    }
+    return () => {
+      // Al cerrar o desmontar, liberamos la ocupación
+      setEditingRecordId(null);
+    };
+  }, [isOpen, draft?.id, setEditingRecordId]);
+
   const [newFollowupNotes, setNewFollowupNotes] = useState('');
   const [newFollowupMethod, setNewFollowupMethod] = useState<'Llamada Telefónica' | 'Correo Electrónico' | 'Revisión Técnica' | 'Visita a Sitio' | 'Minuta de Junta'>('Llamada Telefónica');
   const [newSubtask, setNewSubtask] = useState('');
@@ -196,6 +215,22 @@ export default function LeadDetailDrawer({
           </div>
         </header>
 
+        {/* BANNER DE BLOQUEO POR CONCURRENCIA */}
+        {isLockedByOther && (
+          <div className="bg-amber-500 text-white px-6 py-3 flex items-center justify-between shadow-inner animate-in slide-in-from-top duration-350 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <Lock className="w-4 h-4 shrink-0 animate-bounce" />
+              <div className="text-xs">
+                <span className="font-bold">MODO SOLO LECTURA:</span> Este expediente está siendo editado activamente por{" "}
+                <span className="font-black underline">{currentLock?.name}</span> ({currentLock?.email || 'N/D'}). Las modificaciones están deshabilitadas temporalmente para evitar la sobreescritura accidental.
+              </div>
+            </div>
+            <div className="text-[10px] bg-amber-600 px-2 py-0.5 rounded font-bold font-mono tracking-wider">
+              CONCURRENCIA ACTIVA
+            </div>
+          </div>
+        )}
+
         {/* CONTENIDO (2 COLUMNAS) */}
         <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -213,7 +248,7 @@ export default function LeadDetailDrawer({
                       type="text"
                       value={draft.informacion_general_proyecto || ''}
                       onChange={e => setDraft({ ...draft, informacion_general_proyecto: e.target.value })}
-                      disabled={role === 'Solo Lectura'}
+                      disabled={isReadOnly}
                       className="w-full border border-slate-200 py-2.5 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 transition-colors"
                     />
                   </div>
@@ -223,7 +258,7 @@ export default function LeadDetailDrawer({
                       type="text"
                       value={draft.informacion_general_cliente || ''}
                       onChange={e => setDraft({ ...draft, informacion_general_cliente: e.target.value })}
-                      disabled={role === 'Solo Lectura'}
+                      disabled={isReadOnly}
                       className="w-full border border-slate-200 py-2.5 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 transition-colors"
                     />
                   </div>
@@ -253,12 +288,12 @@ export default function LeadDetailDrawer({
                           type="checkbox"
                           checked={sub.completed}
                           onChange={() => toggleSubtask(sub.id)}
-                          disabled={role === 'Solo Lectura'}
+                          disabled={isReadOnly}
                           className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                         />
                         <span className={`text-sm ${sub.completed ? 'line-through text-slate-400' : 'text-slate-700 font-medium'}`}>{sub.text}</span>
                       </label>
-                      {role !== 'Solo Lectura' && (
+                      {!isReadOnly && (
                         <button onClick={() => removeSubtask(sub.id)} className="text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
                           <Trash2 className="w-4 h-4"/>
                         </button>
@@ -271,7 +306,7 @@ export default function LeadDetailDrawer({
                 </div>
 
                 {/* Formulario Agregar Tarea */}
-                {role !== 'Solo Lectura' && (
+                {!isReadOnly && (
                   <form onSubmit={handleAddSubtask} className="flex gap-2">
                     <input
                       type="text"
@@ -318,7 +353,7 @@ export default function LeadDetailDrawer({
                   <div className="flex justify-end">
                     <button 
                       onClick={handleAddLog} 
-                      disabled={role === 'Solo Lectura' || !newFollowupNotes.trim()} 
+                      disabled={isReadOnly || !newFollowupNotes.trim()} 
                       className="bg-emerald-600 text-white px-5 py-2.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-2 shadow-sm disabled:opacity-50 transition-colors cursor-pointer"
                     >
                       <Plus className="w-4 h-4"/> Guardar Avance
@@ -381,7 +416,7 @@ export default function LeadDetailDrawer({
                             total_general_cotizacion: nextTotal 
                           });
                         }} 
-                        disabled={role==='Solo Lectura'} 
+                        disabled={isReadOnly} 
                         className="w-full border border-slate-200 py-2 pl-7 pr-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white" 
                       />
                     </div>
@@ -409,7 +444,7 @@ export default function LeadDetailDrawer({
                             total_general_cotizacion: nextTotal 
                           });
                         }} 
-                        disabled={role==='Solo Lectura'} 
+                        disabled={isReadOnly} 
                         className="w-full border border-slate-200 py-2 pl-7 pr-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white" 
                       />
                     </div>
@@ -442,7 +477,7 @@ export default function LeadDetailDrawer({
                     type="text" 
                     value={draft.informacion_general_planta || ''} 
                     onChange={e => setDraft({...draft, informacion_general_planta: e.target.value})} 
-                    disabled={role==='Solo Lectura'} 
+                    disabled={isReadOnly} 
                     className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white" 
                   />
                 </div>
@@ -457,7 +492,7 @@ export default function LeadDetailDrawer({
                     <select 
                       value={draft.etapa || draft.estado_proyecto || 'Nuevo'} 
                       onChange={e => setDraft({...draft, etapa: e.target.value, estado_proyecto: e.target.value as any, fecha_cambio_etapa: getMexicoCityDateString()})} 
-                      disabled={role==='Solo Lectura'} 
+                      disabled={isReadOnly} 
                       className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-slate-50"
                     >
                       {kanbanColumns.map(c => <option key={c} value={c}>{c}</option>)}
@@ -468,7 +503,7 @@ export default function LeadDetailDrawer({
                     <select 
                       value={draft.responsable || ''} 
                       onChange={e => setDraft({...draft, responsable: e.target.value})} 
-                      disabled={role==='Solo Lectura'} 
+                      disabled={isReadOnly} 
                       className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white"
                     >
                       <option value="">-- Sin Asignar --</option>
@@ -507,7 +542,7 @@ export default function LeadDetailDrawer({
                               }
                             })()}d`}
                           </span>
-                          {role !== 'Solo Lectura' && !resetSuccess && (
+                          {!isReadOnly && !resetSuccess && (
                             <button
                               type="button"
                               onClick={handleResetDaysInModal}
@@ -524,7 +559,7 @@ export default function LeadDetailDrawer({
                           type="number" 
                           value={draft.stagnation_days_limit ?? 5} 
                           onChange={e => setDraft({...draft, stagnation_days_limit: Number(e.target.value)})} 
-                          disabled={role==='Solo Lectura'} 
+                          disabled={isReadOnly} 
                           className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white" 
                         />
                         <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-bold">Días</span>
@@ -535,7 +570,7 @@ export default function LeadDetailDrawer({
                       <select 
                         value={draft.status_proyecto || draft.nivel_termo || 'Warm'} 
                         onChange={e => setDraft({...draft, status_proyecto: e.target.value as any, nivel_termo: e.target.value})} 
-                        disabled={role==='Solo Lectura'} 
+                        disabled={isReadOnly} 
                         className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white"
                       >
                         <option value="Win">Win</option>
@@ -552,7 +587,7 @@ export default function LeadDetailDrawer({
               <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                   <h4 className="text-[11px] font-extrabold uppercase text-slate-500 tracking-wider">Contacto del Cliente</h4>
-                  {role !== 'Solo Lectura' && !isAddingContact && (
+                  {!isReadOnly && !isAddingContact && (
                     <button
                       type="button"
                       onClick={() => setIsAddingContact(true)}
@@ -670,7 +705,7 @@ export default function LeadDetailDrawer({
                               });
                             }
                           }} 
-                          disabled={role==='Solo Lectura'} 
+                          disabled={isReadOnly} 
                           className="w-full border border-slate-200 py-2 px-3 rounded-lg text-sm font-bold text-slate-700 outline-none focus:border-blue-500 bg-white cursor-pointer"
                         >
                           <option value="">-- Seleccionar o Vincular Contacto --</option>
@@ -694,7 +729,7 @@ export default function LeadDetailDrawer({
                         <p className="text-blue-600 font-mono text-[11px] mt-2 pl-4">{draft.contacto_email || 'Sin correo'}</p>
                         <p className="text-blue-600 font-mono text-[11px] pl-4">{draft.contacto_telefono || 'Sin teléfono'}</p>
                         
-                        {role !== 'Solo Lectura' && (
+                        {!isReadOnly && (
                           <button
                             type="button"
                             onClick={() => {
@@ -736,7 +771,7 @@ export default function LeadDetailDrawer({
           </button>
           <button 
             onClick={() => onSave(draft)} 
-            disabled={role === 'Solo Lectura'} 
+            disabled={isReadOnly} 
             className="px-6 py-2.5 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-md disabled:opacity-50 flex items-center gap-2 cursor-pointer"
           >
             Guardar Cambios

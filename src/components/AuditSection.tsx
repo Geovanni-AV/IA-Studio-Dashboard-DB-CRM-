@@ -90,6 +90,20 @@ export default function AuditSection({ role, onShowAudit }: AuditSectionProps) {
     );
   }
 
+  const formatAuditDate = (utcTimestampStr: string) => {
+    if (!utcTimestampStr) return 'Fecha no disponible'; // Cláusula de guardia Failsafe para valores nulos
+    try {
+      const date = new Date(utcTimestampStr);
+      return new Intl.DateTimeFormat('es-MX', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).format(date);
+    } catch (e) {
+      return utcTimestampStr; // Fallback string en caso de error de parseo
+    }
+  };
+
   const filteredLogs = logs.filter((l) => {
     return (
       l.operador.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -191,7 +205,7 @@ export default function AuditSection({ role, onShowAudit }: AuditSectionProps) {
                 filteredLogs.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/50">
                     <td className="p-3 text-slate-400 font-data-mono font-semibold white-space-nowrap">
-                      [{item.fecha}]
+                      [{formatAuditDate(item.fecha)}]
                     </td>
                     <td className="p-3">
                       <span className="inline-block px-1.5 py-0.5 rounded font-sans font-bold text-[9px] uppercase border bg-slate-50 text-slate-700 border-slate-200">
