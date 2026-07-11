@@ -22,7 +22,7 @@ import {
   Target,
   Loader2
 } from 'lucide-react';
-import { getSupabaseClient, getResolvedCRMTableName, mapRawCRMRecord } from '../supabaseService';
+import { getSupabaseClient, getResolvedCRMTableName, mapRawCRMRecord, getKnownCRMTableColumns } from '../supabaseService';
 
 interface DashboardProps {
   exchangeRate: number;
@@ -55,10 +55,41 @@ export default function Dashboard({
       const client = getSupabaseClient(url, key);
 
       if (client) {
-         // PROYECCIÓN: Solo pedimos las columnas críticas. Ignoramos JSONs, links, checklists y arrays gigantes.
+         // PROYECCIÓN DINÁMICA: Filtramos las columnas solicitadas contra las columnas reales para evitar error 400 Bad Request (undefined column).
+         const knownColumns = getKnownCRMTableColumns();
+         const requestedColumns = [
+           'id', 'informacion_general_folio', 'fecha_registro', 'fecha_inicio_proyecto',
+           'total_hardware_cotizacion', 'total_servicios_cotizacion', 'total_subtotal_cotizacion',
+           'informacion_general_moneda', 'estado_proyecto', 'status_proyecto', 'cliente_pais',
+           'cliente_ubicacion', 'etapa', 'nivel_termo', 'prioridad_nivel', 'responsable',
+           'informacion_general_cliente', 'informacion_general_proyecto', 'notas_comerciales'
+         ];
+         let selectString = '*';
+         if (knownColumns.length > 0) {
+           const validated = requestedColumns.filter(reqCol => {
+             if (knownColumns.includes(reqCol)) return true;
+             const normReq = reqCol.toLowerCase().replace(/[\s_-]/g, '');
+             return knownColumns.some(knownCol => knownCol.toLowerCase().replace(/[\s_-]/g, '') === normReq);
+           });
+           if (validated.length > 0) {
+             const dbCols = validated.map(reqCol => {
+               if (knownColumns.includes(reqCol)) return reqCol;
+               const normReq = reqCol.toLowerCase().replace(/[\s_-]/g, '');
+               return knownColumns.find(knownCol => knownCol.toLowerCase().replace(/[\s_-]/g, '') === normReq) || reqCol;
+             });
+             // Asegurar de incluir siempre la columna ID
+             if (!dbCols.includes('id') && knownColumns.includes('id')) {
+               dbCols.unshift('id');
+             }
+             selectString = dbCols.join(', ');
+           }
+         } else {
+           selectString = requestedColumns.join(', ');
+         }
+
          const { data, error } = await client
            .from(getResolvedCRMTableName())
-           .select('id, informacion_general_folio, fecha_registro, fecha_inicio_proyecto, total_hardware_cotizacion, total_servicios_cotizacion, total_subtotal_cotizacion, informacion_general_moneda, estado_proyecto, status_proyecto, cliente_pais, cliente_ubicacion, etapa, nivel_termo, prioridad_nivel, responsable, informacion_general_cliente, informacion_general_proyecto, notas_comerciales')
+           .select(selectString)
            .limit(10000); // Soporta hasta 10,000 registros sin afectar la RAM
 
          if (!error && data && active) {

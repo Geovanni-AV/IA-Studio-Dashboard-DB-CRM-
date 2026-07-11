@@ -123,6 +123,7 @@ export default function MainAppContent({
   const [currentCurrency, setCurrentCurrency] = useState<'USD' | 'MXN'>('USD');
   const [activeTab, setActiveTab ] = useState('Dashboard');
   const [pulseNotification, setPulseNotification] = useState(true);
+  const [prefilledLeadForOC, setPrefilledLeadForOC] = useState<CRMRecord | null>(null);
 
   const [dbUsers, setDbUsers] = useState<UserAccount[]>([]);
   const [userStatus, setUserStatus] = useState<'active' | 'pending' | 'rejected' | 'not_logged_in' | 'loading'>('loading');
@@ -1224,6 +1225,10 @@ export default function MainAppContent({
                   onLoadMore={handleLoadMoreRecords}
                   hasMoreRecords={hasMoreRecords}
                   isLoadingMore={isLoadingMore}
+                  onRedirectToOC={(record) => {
+                    setPrefilledLeadForOC(record);
+                    setActiveTab('PurchaseOrders');
+                  }}
                   onAddRecord={async (nRecord) => {
                     registerLocalMutation(nRecord.id);
                     setRecords((prev) => [nRecord, ...prev]);
@@ -1328,6 +1333,8 @@ export default function MainAppContent({
                     }
                   }}
                   onShowAudit={appendAuditLog}
+                  prefilledLead={prefilledLeadForOC}
+                  clearPrefilledLead={() => setPrefilledLeadForOC(null)}
                 />
               )}
 

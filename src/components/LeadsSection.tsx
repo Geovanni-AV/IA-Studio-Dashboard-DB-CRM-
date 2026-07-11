@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { CRMRecord, UserRole, FollowupEntry, Contact, UserAccount, ColumnConfig } from '../types';
 import { getMexicoCityDateString, getMexicoCityDateTimeShortString } from '../dateUtils';
-import { toValidUUID, getCRMSettings, updateCRMSettings, subscribeToCRMSettings } from '../supabaseService';
+import { toValidUUID, getCRMSettings, updateCRMSettings, subscribeToCRMSettings, ocService, pushPurchaseOrderToSupabase } from '../supabaseService';
 import { safeJsonParse, safeRound } from '../utils/coreUtils';
+import { useData } from '../contexts/DataContext';
+import { PurchaseOrder } from '../types';
 import { 
   Plus, 
   Lock, 
@@ -16,7 +18,8 @@ import {
   Trash2,
   ArrowUp,
   ArrowDown,
-  Save
+  Save,
+  Trophy
 } from 'lucide-react';
 
 import KanbanBoard, { KanbanMeta } from './Leads/KanbanBoard';
@@ -39,6 +42,7 @@ interface LeadsSectionProps {
   onLoadMore?: () => void;
   hasMoreRecords?: boolean;
   isLoadingMore?: boolean;
+  onRedirectToOC?: (record: CRMRecord) => void;
 }
 
 // Stage configuration thresholds for alerts
@@ -76,8 +80,11 @@ export default function LeadsSection({
   onAddContact,
   onLoadMore,
   hasMoreRecords,
-  isLoadingMore
+  isLoadingMore,
+  onRedirectToOC
 }: LeadsSectionProps) {
+  const { purchaseOrders, setPurchaseOrders, showToast } = useData();
+
   // Active session details
   const isUserSaved = typeof window !== 'undefined' ? localStorage.getItem('verse_google_user') : null;
   const activeSessionUserName = isUserSaved ? JSON.parse(isUserSaved)?.name : 'Geovanni Andrade';
@@ -319,6 +326,160 @@ export default function LeadsSection({
   } | null>(null);
   const [closeReason, setCloseReason] = useState<string>('Ganado por precio');
   const [closeNotes, setCloseNotes] = useState<string>('');
+
+  // --- STATE FOR HOT LINKING MODAL (WIN STATUS INTERCEPTION) ---
+  const [pendingWin, setPendingWin] = useState<{
+    record: CRMRecord;
+    targetStage: string;
+    sourceStage: string;
+    onSuccess: (linkedFolio: string, linkedLink: string) => void;
+    onCancel: () => void;
+  } | null>(null);
+
+  const [linkOption, setLinkOption] = useState<'existing' | 'new'>('existing');
+  const [selectedExistingOCId, setSelectedExistingOCId] = useState<string>('');
+  const [isLinking, setIsLinking] = useState(false);
+  
+  // Fields for Option B (New OC)
+  const [newOCFolio, setNewOCFolio] = useState('');
+  const [newOCLink, setNewOCLink] = useState('');
+  const [newOCFechaInicio, setNewOCFechaInicio] = useState(getMexicoCityDateString());
+  const [newOCInstalacion, setNewOCInstalacion] = useState(true);
+  const [newOCMonto, setNewOCMonto] = useState<number>(0);
+
+  useEffect(() => {
+    if (pendingWin) {
+      setNewOCMonto(pendingWin.record.total_general_cotizacion || 0);
+      setNewOCFolio('');
+      setNewOCLink('');
+      setNewOCFechaInicio(getMexicoCityDateString());
+      setNewOCInstalacion(pendingWin.record.informacion_general_instalacion_incluida !== false);
+      setSelectedExistingOCId('');
+      // Default to existing if there is any orphaned OC, else default to new
+      const hasOrphaned = purchaseOrders.some(po => !po.leadId);
+      setLinkOption(hasOrphaned ? 'existing' : 'new');
+    }
+  }, [pendingWin, purchaseOrders]);
+
+  const eligibleExistingOCs = useMemo(() => {
+    if (!pendingWin) return [];
+    return purchaseOrders.filter(po => !po.leadId || po.leadId === pendingWin.record.id);
+  }, [purchaseOrders, pendingWin]);
+
+  const handleConfirmHotLink = async () => {
+    if (!pendingWin) return;
+    setIsLinking(true);
+    const { record, onSuccess } = pendingWin;
+    const config = {
+      url: localStorage.getItem('verse_supabase_url') || '',
+      key: localStorage.getItem('verse_supabase_key') || ''
+    };
+
+    try {
+      if (linkOption === 'existing') {
+        if (!selectedExistingOCId) {
+          alert("Por favor, seleccione una Orden de Compra existente de la lista.");
+          return;
+        }
+        const selectedOC = purchaseOrders.find(po => String(po.id) === String(selectedExistingOCId));
+        if (!selectedOC) return;
+
+        try {
+          if (config.url && config.key) {
+            const ok = await ocService.updateOCStatus(
+              selectedOC.id,
+              selectedOC.estatusPago || 'Activa',
+              selectedOC.replacedById,
+              {
+                ...selectedOC,
+                leadId: record.id,
+                folioRefCRM: record.informacion_general_folio || undefined
+              }
+            );
+            if (!ok) throw new Error("Fallo al actualizar la relación de la Orden de Compra en el servidor.");
+          }
+
+          setPurchaseOrders(prev => prev.map(po => {
+            if (String(po.id) === String(selectedOC.id)) {
+              return {
+                ...po,
+                leadId: record.id,
+                folioRefCRM: record.informacion_general_folio || undefined
+              };
+            }
+            return po;
+          }));
+
+          onSuccess(selectedOC.folioOC, selectedOC.linkOC || '');
+          showToast(`¡Licitación vinculada con éxito a la Orden de Compra ${selectedOC.folioOC}!`, 'success');
+          setPendingWin(null);
+
+        } catch (err: any) {
+          console.error("Error linking OC:", err);
+          alert(`Error al vincular: ${err.message || err}`);
+        }
+
+      } else {
+        if (!newOCFolio.trim()) {
+          alert("Debe ingresar un Folio de Orden de Compra válido.");
+          return;
+        }
+
+        // Generate determinist / unique numeric ID
+        let numericId = 0;
+        const getNumericId = (str: string) => {
+          let hash = 0;
+          for (let i = 0; i < str.length; i++) {
+            hash = (hash * 31 + str.charCodeAt(i)) & 0x7FFFFFFF;
+          }
+          return hash || Math.floor(Math.random() * 10000000);
+        };
+        numericId = getNumericId(`po_ext_${record.informacion_general_folio}_${newOCFolio}`);
+
+        const newPO: PurchaseOrder = {
+          id: String(numericId),
+          folioOC: newOCFolio.trim(),
+          linkOC: newOCLink.trim() || 'https://drive.google.com/open?id=standard_po_placeholder',
+          fechaInicio: newOCFechaInicio || getMexicoCityDateString(),
+          instalacionIncluida: newOCInstalacion,
+          monto: newOCMonto || record.total_general_cotizacion || 0,
+          moneda: record.informacion_general_moneda === 'USD' ? 'USD' : 'MXN',
+          cliente: record.informacion_general_cliente || '',
+          proyecto: record.informacion_general_proyecto || '',
+          folioRefCRM: record.informacion_general_folio || '',
+          estatusPago: 'Pendiente de cobro',
+          replacedById: null,
+          leadId: record.id,
+          __partidas: []
+        };
+
+        try {
+          if (config.url && config.key) {
+            const ok = await pushPurchaseOrderToSupabase(config.url, config.key, newPO);
+            if (!ok) throw new Error("Fallo al persistir la nueva Orden de Compra en el servidor.");
+          }
+
+          setPurchaseOrders(prev => {
+            const index = prev.findIndex(p => String(p.id) === String(newPO.id));
+            if (index !== -1) {
+              return prev.map(p => String(p.id) === String(newPO.id) ? newPO : p);
+            }
+            return [newPO, ...prev];
+          });
+
+          onSuccess(newPO.folioOC, newPO.linkOC || '');
+          showToast(`¡Se ha creado y vinculado la Orden de Compra ${newPO.folioOC} con éxito!`, 'success');
+          setPendingWin(null);
+
+        } catch (err: any) {
+          console.error("Error creating OC:", err);
+          alert(`Error al registrar y vincular la Orden de Compra: ${err.message || err}`);
+        }
+      }
+    } finally {
+      setIsLinking(false);
+    }
+  };
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const [draggedOverCardId, setDraggedOverCardId] = useState<string | null>(null);
@@ -694,6 +855,40 @@ export default function LeadsSection({
       tags: existingRec?.tags || null
     };
 
+    const isNowGanado = formStatus === 'Cerrado Ganado';
+    const wasGanado = existingRec?.estado_proyecto === 'Cerrado Ganado';
+
+    if (isNowGanado && !wasGanado && !payload.folio_orden_compra) {
+      setPendingWin({
+        record: payload,
+        targetStage: payload.etapa || 'Cerrado Ganado',
+        sourceStage: existingRec?.etapa || 'Nuevo',
+        onSuccess: (folio, link) => {
+          const finalPayload: CRMRecord = {
+            ...payload,
+            estado_proyecto: 'Cerrado Ganado' as CRMRecord['estado_proyecto'],
+            status_proyecto: 'Win' as CRMRecord['status_proyecto'],
+            etapa: payload.etapa || 'Cerrado Ganado',
+            nivel_termo: 'Win',
+            estado: 'Cerrado Ganado',
+            folio_orden_compra: folio,
+            link_orden_compra: link,
+            fecha_inicio_proyecto: getMexicoCityDateString()
+          };
+          if (isEditing) {
+            onUpdateRecord(finalPayload);
+            onShowAudit('MODIFICACIÓN', `Actualizó expediente de ${formCliente} (Folio ${formFolio}) a Cerrado Ganado y vinculó OC ${folio}`);
+          } else {
+            onAddRecord(finalPayload);
+            onShowAudit('ALTA REGISTRO', `Creó oferta ganada para ${formCliente} (Folio ${formFolio}) y vinculó OC ${folio}`);
+          }
+          setIsFormOpen(false);
+        },
+        onCancel: () => {}
+      });
+      return;
+    }
+
     if (isEditing) {
       onUpdateRecord(payload);
       const changes: string[] = [];
@@ -898,13 +1093,49 @@ export default function LeadsSection({
     });
     const requireConfirm = colConfig && typeof colConfig === 'object' ? !!colConfig.require_confirm : false;
 
-    // 2. Nueva lógica estricta
+    // 2. Nueva lógica estricta (Intercepta 'Cerrado Ganado' incondicionalmente para forzar vinculación de OC)
     if (sourceStage !== targetStage) {
+      if (defaultTarget === 'Cerrado Ganado') {
+        if (onRedirectToOC) {
+          onRedirectToOC(sourceCard);
+          return;
+        }
+        setPendingWin({
+          record: sourceCard,
+          targetStage,
+          sourceStage,
+          onSuccess: (folio, link) => {
+            const stageRecords = getStageRecords(targetStage);
+            let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+            const updatedCard: CRMRecord = {
+              ...sourceCard,
+              estado_proyecto: 'Cerrado Ganado' as CRMRecord['estado_proyecto'],
+              status_proyecto: 'Win' as CRMRecord['status_proyecto'],
+              etapa: targetStage,
+              nivel_termo: 'Win',
+              estado: 'Cerrado Ganado',
+              folio_orden_compra: folio,
+              link_orden_compra: link,
+              fecha_inicio_proyecto: getMexicoCityDateString()
+            };
+            const targetIdx = listWithoutDragged.findIndex(r => r.id === targetCardId);
+            if (targetIdx !== -1) {
+              listWithoutDragged.splice(targetIdx, 0, updatedCard);
+            } else {
+              listWithoutDragged.push(updatedCard);
+            }
+            saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
+          },
+          onCancel: () => {}
+        });
+        return;
+      }
+
       if (requireConfirm) {
-        // Si la columna es "Segura" Y es de cierre (Ganado, Perdido o Archivar) -> Abrimos Modal de Cierre
-        if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
+        // Si la columna es "Segura" Y es de cierre (Perdido o Archivar) -> Abrimos Modal de Cierre
+        if (defaultTarget === 'Cerrado Perdido') {
           setPendingDrag({ recordId, targetStage, sourceStage });
-          setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+          setCloseReason('Perdido por presupuesto');
           setCloseNotes('');
           return; // Detenemos el flujo hasta que guarde el modal
         } else {
@@ -913,9 +1144,6 @@ export default function LeadsSection({
             return; // Si cancela, se revierte
           }
         }
-      } else {
-        // Si la columna es de cierre, pero el admin NO le puso "Modo Seguro",
-        // se moverá libremente sin preguntar (respetando la configuración visual).
       }
     }
 
@@ -958,13 +1186,44 @@ export default function LeadsSection({
     });
     const requireConfirm = colConfig && typeof colConfig === 'object' ? !!colConfig.require_confirm : false;
 
-    // 2. Nueva lógica estricta
+    // 2. Nueva lógica estricta (Intercepta 'Cerrado Ganado' incondicionalments para forzar vinculación de OC)
     if (sourceStage !== targetStage) {
+      if (defaultTarget === 'Cerrado Ganado') {
+        if (onRedirectToOC) {
+          onRedirectToOC(sourceCard);
+          return;
+        }
+        setPendingWin({
+          record: sourceCard,
+          targetStage,
+          sourceStage,
+          onSuccess: (folio, link) => {
+            const stageRecords = getStageRecords(targetStage);
+            let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+            const updatedCard: CRMRecord = {
+              ...sourceCard,
+              estado_proyecto: 'Cerrado Ganado' as CRMRecord['estado_proyecto'],
+              status_proyecto: 'Win' as CRMRecord['status_proyecto'],
+              etapa: targetStage,
+              nivel_termo: 'Win',
+              estado: 'Cerrado Ganado',
+              folio_orden_compra: folio,
+              link_orden_compra: link,
+              fecha_inicio_proyecto: getMexicoCityDateString()
+            };
+            listWithoutDragged.push(updatedCard);
+            saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
+          },
+          onCancel: () => {}
+        });
+        return;
+      }
+
       if (requireConfirm) {
-        // Si la columna es "Segura" Y es de cierre (Ganado, Perdido o Archivar) -> Abrimos Modal de Cierre
-        if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
+        // Si la columna es "Segura" Y es de cierre (Perdido o Archivar) -> Abrimos Modal de Cierre
+        if (defaultTarget === 'Cerrado Perdido') {
           setPendingDrag({ recordId, targetStage, sourceStage });
-          setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+          setCloseReason('Perdido por presupuesto');
           setCloseNotes('');
           return; // Detenemos el flujo hasta que guarde el modal
         } else {
@@ -973,9 +1232,6 @@ export default function LeadsSection({
             return; // Si cancela, se revierte
           }
         }
-      } else {
-        // Si la columna es de cierre, pero el admin NO le puso "Modo Seguro",
-        // se moverá libremente sin preguntar (respetando la configuración visual).
       }
     }
 
@@ -1036,14 +1292,44 @@ export default function LeadsSection({
     if (sourceStage === targetStage) return;
 
     const defaultTarget = getDefaultStageForCustom(targetStage);
+    const sourceCard = records.find(r => r.id === recordId);
 
-    if (defaultTarget === 'Cerrado Ganado' || defaultTarget === 'Cerrado Perdido') {
+    if (defaultTarget === 'Cerrado Ganado') {
+      if (sourceCard) {
+        if (onRedirectToOC) {
+          onRedirectToOC(sourceCard);
+          return;
+        }
+        setPendingWin({
+          record: sourceCard,
+          targetStage,
+          sourceStage,
+          onSuccess: (folio, link) => {
+            const stageRecords = getStageRecords(targetStage);
+            let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
+            const updatedCard: CRMRecord = {
+              ...sourceCard,
+              estado_proyecto: 'Cerrado Ganado' as CRMRecord['estado_proyecto'],
+              status_proyecto: 'Win' as CRMRecord['status_proyecto'],
+              etapa: targetStage,
+              nivel_termo: 'Win',
+              estado: 'Cerrado Ganado',
+              folio_orden_compra: folio,
+              link_orden_compra: link,
+              fecha_inicio_proyecto: getMexicoCityDateString()
+            };
+            listWithoutDragged.push(updatedCard);
+            saveNewListPrioritiesAndStage(listWithoutDragged, targetStage, recordId, sourceStage);
+          },
+          onCancel: () => {}
+        });
+      }
+    } else if (defaultTarget === 'Cerrado Perdido') {
       setPendingDrag({ recordId, targetStage, sourceStage });
-      setCloseReason(defaultTarget === 'Cerrado Ganado' ? 'Ganado por precio' : 'Perdido por presupuesto');
+      setCloseReason('Perdido por presupuesto');
       setCloseNotes('');
     } else {
       const stageRecords = getStageRecords(targetStage);
-      const sourceCard = records.find(r => r.id === recordId);
       if (sourceCard) {
         let listWithoutDragged = stageRecords.filter(r => r.id !== recordId);
         listWithoutDragged.push(sourceCard);
@@ -1293,7 +1579,260 @@ export default function LeadsSection({
     );
   };
 
+  const renderHotLinkingModal = () => {
+    if (!pendingWin) return null;
+    const { record, onCancel } = pendingWin;
+
+    return createPortal(
+      <div className="fixed inset-0 bg-[#071322]/45 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg space-y-6 border border-slate-200/80 animate-in zoom-in-95 duration-200 relative">
+          
+          {/* Header section with Trophy / Hot status look */}
+          <header className="flex items-center gap-4 pb-4 border-b border-slate-100">
+            <div className="p-3.5 bg-amber-50 text-amber-600 rounded-full border border-amber-100">
+              <Trophy className="w-6 h-6 animate-bounce" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-2">
+                ¡Licitación Ganada! Requerimiento de OC
+              </h3>
+              <p className="text-xs text-slate-500 font-semibold leading-relaxed">
+                El sistema detectó que este proyecto pasa a <strong className="text-emerald-600 font-black">Cerrado Ganado (Win)</strong>. Es obligatorio vincular su respaldo financiero.
+              </p>
+            </div>
+          </header>
+
+          {/* Lead info mini-summary */}
+          <div className="bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/60 text-xs text-slate-700 space-y-1.5 font-sans">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400 font-bold uppercase text-[9px] font-mono">Folio de Licitación</span>
+              <span className="font-mono font-bold text-slate-900 bg-slate-200/80 px-2 py-0.5 rounded text-[10px]">{record.informacion_general_folio || 'S/F'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 font-bold uppercase text-[9px] font-mono">Cliente</span>
+              <span className="font-bold text-slate-800">{record.informacion_general_cliente}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 font-bold uppercase text-[9px] font-mono">Proyecto</span>
+              <span className="font-medium text-slate-600 max-w-[250px] truncate" title={record.informacion_general_proyecto || ''}>{record.informacion_general_proyecto}</span>
+            </div>
+            <div className="flex justify-between items-center pt-1 border-t border-slate-200/50">
+              <span className="text-slate-400 font-bold uppercase text-[9px] font-mono">Valor de Cotización</span>
+              <span className="font-black text-blue-700 font-mono text-sm">
+                ${(record.total_general_cotizacion || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {record.informacion_general_moneda}
+              </span>
+            </div>
+          </div>
+
+          {/* Option Selector tabs */}
+          <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setLinkOption('existing')}
+              className={`py-2 text-xs font-extrabold rounded-md transition-all cursor-pointer ${linkOption === 'existing' ? 'bg-white text-blue-700 shadow-3xs' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Vincular OC Existente
+            </button>
+            <button
+              type="button"
+              onClick={() => setLinkOption('new')}
+              className={`py-2 text-xs font-extrabold rounded-md transition-all cursor-pointer ${linkOption === 'new' ? 'bg-white text-blue-700 shadow-3xs' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Registrar Nueva OC
+            </button>
+          </div>
+
+          {/* Tab contents */}
+          <div className="space-y-4 min-h-[160px]">
+            {linkOption === 'existing' ? (
+              <div className="space-y-3">
+                <label className="block text-[10px] uppercase font-bold text-slate-400 font-mono">
+                  Seleccionar Orden de Compra de la Lista
+                </label>
+                {eligibleExistingOCs.length === 0 ? (
+                  <div className="p-4 bg-amber-50/60 border border-amber-100 rounded-xl text-xs text-amber-850 flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold">No hay Órdenes de Compra huérfanas disponibles.</p>
+                      <p className="text-[11px] leading-relaxed font-medium">
+                        Todas las órdenes de compra ya se encuentran enlazadas a un proyecto. Por favor, selecciona la pestaña <strong>"Registrar Nueva OC"</strong> para dar de alta una nueva.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      value={selectedExistingOCId}
+                      onChange={(e) => setSelectedExistingOCId(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 py-3 px-3 pr-10 text-xs font-bold rounded-xl outline-none appearance-none cursor-pointer text-slate-800 focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-3xs"
+                    >
+                      <option value="">-- Selecciona una Orden de Compra --</option>
+                      {eligibleExistingOCs.map(po => (
+                        <option key={po.id} value={po.id}>
+                          {po.folioOC} - {po.cliente} ({po.proyecto}) | ${(po.monto || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} {po.moneda}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+                      <Settings className="w-4 h-4 animate-spin-slow" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] uppercase font-extrabold text-slate-400 font-mono mb-1">
+                    Folio de Orden de Compra <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newOCFolio}
+                    onChange={(e) => setNewOCFolio(e.target.value)}
+                    placeholder="Ejem: OC-BIMBO-9944"
+                    className="w-full bg-slate-50 border border-slate-300 py-2.5 px-3 text-xs font-bold rounded-xl outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all text-slate-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase font-extrabold text-slate-400 font-mono mb-1">
+                    Monto Autorizado ({record.informacion_general_moneda})
+                  </label>
+                  <input
+                    type="number"
+                    value={newOCMonto || ''}
+                    onChange={(e) => setNewOCMonto(Number(e.target.value))}
+                    placeholder="Monto de la Orden"
+                    className="w-full bg-slate-50 border border-slate-300 py-2.5 px-3 text-xs font-black rounded-xl outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all text-slate-850 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase font-extrabold text-slate-400 font-mono mb-1">
+                    Fecha de Inicio de Proyecto
+                  </label>
+                  <input
+                    type="date"
+                    value={newOCFechaInicio}
+                    onChange={(e) => setNewOCFechaInicio(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 py-2.5 px-3 text-xs font-bold rounded-xl outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all text-slate-800"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] uppercase font-extrabold text-slate-400 font-mono mb-1">
+                    Enlace de Respaldo Digital (Drive / Dropbox)
+                  </label>
+                  <input
+                    type="url"
+                    value={newOCLink}
+                    onChange={(e) => setNewOCLink(e.target.value)}
+                    placeholder="https://drive.google.com/..."
+                    className="w-full bg-slate-50 border border-slate-300 py-2.5 px-3 text-xs font-medium rounded-xl outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all text-slate-700"
+                  />
+                </div>
+
+                <div className="sm:col-span-2 flex items-center gap-2.5 bg-slate-50 py-2.5 px-3.5 rounded-xl border border-slate-200/50">
+                  <input
+                    type="checkbox"
+                    id="chk-hotlink-inst"
+                    checked={newOCInstalacion}
+                    onChange={(e) => setNewOCInstalacion(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <label htmlFor="chk-hotlink-inst" className="text-xs font-bold text-slate-700 cursor-pointer select-none">
+                    Incluir montaje técnico / servicios de instalación en sitio
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons footer */}
+          <footer className="pt-4 border-t border-slate-100 flex justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={isLinking}
+              onClick={() => {
+                onCancel();
+                setPendingWin(null);
+              }}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition shadow-3xs border border-slate-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Cancelar Cierre
+            </button>
+            <button
+              type="button"
+              disabled={isLinking || (linkOption === 'existing' && !selectedExistingOCId) || (linkOption === 'new' && !newOCFolio.trim())}
+              onClick={handleConfirmHotLink}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-3xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            >
+              {isLinking ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-t-transparent border-white rounded-full animate-spin"></span>
+                  Procesando...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  Vincular y Cerrar
+                </>
+              )}
+            </button>
+          </footer>
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
   const handleSaveDetailDrawer = (updatedRecord: CRMRecord) => {
+    const isNowGanado = getDefaultStageForCustom(updatedRecord.etapa || updatedRecord.estado_proyecto || '') === 'Cerrado Ganado';
+    const originalRecord = records.find(r => r.id === updatedRecord.id);
+    const wasGanado = originalRecord ? getDefaultStageForCustom(originalRecord.etapa || originalRecord.estado_proyecto || '') === 'Cerrado Ganado' : false;
+
+    if (isNowGanado && !wasGanado && !updatedRecord.folio_orden_compra) {
+      setPendingWin({
+        record: updatedRecord,
+        targetStage: updatedRecord.etapa || 'Cerrado Ganado',
+        sourceStage: originalRecord?.etapa || 'Nuevo',
+        onSuccess: (folio, link) => {
+          const finalRecord: CRMRecord = {
+            ...updatedRecord,
+            estado_proyecto: 'Cerrado Ganado' as CRMRecord['estado_proyecto'],
+            status_proyecto: 'Win' as CRMRecord['status_proyecto'],
+            etapa: updatedRecord.etapa || 'Cerrado Ganado',
+            nivel_termo: 'Win',
+            estado: 'Cerrado Ganado',
+            folio_orden_compra: folio,
+            link_orden_compra: link,
+            fecha_inicio_proyecto: getMexicoCityDateString()
+          };
+
+          const updatedMeta = {
+            ...kanbanMeta,
+            [finalRecord.id]: {
+              stage: finalRecord.etapa || 'Cerrado Ganado',
+              dateEnteredStage: getMexicoCityDateString(),
+              responsable: finalRecord.responsable || '',
+              subtasks: Array.isArray(finalRecord.__tareas) ? finalRecord.__tareas : [],
+              tags: finalRecord.tags ? finalRecord.tags.split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+              stagnation_days_limit: finalRecord.stagnation_days_limit !== undefined && finalRecord.stagnation_days_limit !== null ? Number(finalRecord.stagnation_days_limit) : 5
+            }
+          };
+          setKanbanMeta(updatedMeta);
+          localStorage.setItem('verse_crm_kanban_meta', JSON.stringify(updatedMeta));
+
+          onUpdateRecord(finalRecord);
+          onShowAudit('MODIFICACIÓN', `Cambios guardados con éxito para ${finalRecord.informacion_general_folio} y vinculado a OC ${folio}.`);
+          setActiveDrawerRecordId(null);
+        },
+        onCancel: () => {}
+      });
+      return;
+    }
+
     // 1. Sincronizar kanbanMeta para mantener la consistencia local
     const updatedMeta = {
       ...kanbanMeta,
@@ -1642,6 +2181,7 @@ export default function LeadsSection({
 
       {renderDrawerLateralPanel()}
       {renderConfirmationCloseModal()}
+      {renderHotLinkingModal()}
       {renderColumnConfigModal()}
 
       {/* MODAL: DETAIL WINDOW */}

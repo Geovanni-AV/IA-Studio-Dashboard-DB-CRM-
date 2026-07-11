@@ -58,17 +58,36 @@ let resolvedAuditLogsTableName: string | null = null;
 let resolvedUsuariosTableName: string | null = null;
 let resolvedOCTableName: string | null = null;
 
-let knownCRMTableColumns: string[] = [];
+let knownCRMTableColumns: string[] = [
+  'id', 'informacion_general_folio', 'fecha_registro', 'informacion_general_cliente', 'informacion_general_planta',
+  'cliente_pais', 'cliente_ubicacion', 'informacion_general_proyecto', 'informacion_general_link_cotizacion',
+  'total_hardware_cotizacion', 'total_servicios_cotizacion', 'total_subtotal_cotizacion', 'total_iva_cotizacion',
+  'total_general_cotizacion', 'informacion_general_moneda', 'estado_proyecto', 'status_proyecto', 'folio_orden_compra',
+  'link_orden_compra', 'fecha_inicio_proyecto', 'informacion_general_instalacion_incluida', 'notas_comerciales',
+  'acciones_seguimiento', 'sustituye_folio_anterior', 'prioridad_nivel', 'etapa', 'nivel_termo', 'prioridad', 'estado',
+  'fecha_cambio_etapa', 'stagnation_days_limit', 'checklist_tasks', '__tareas'
+];
 let knownContactsColumns: string[] = [];
 let knownAuditLogsColumns: string[] = [];
 let knownUsuariosColumns: string[] = [];
-let knownOCTableColumns: string[] = [];
+let knownOCTableColumns: string[] = [
+  'id', 'id_documento', 'nombre_archivo', 'link_pdf', 'tipo_documento', 'estado_documento',
+  'version_change_order', 'fecha_expedicion', 'fecha_modificacion', 'empresa_compradora',
+  'area_proyecto', 'contacto_comprador',  // <-- CORREGIDO
+  'empresa_proveedora', 'rfc_proveedor',
+  'direccion_proveedor', 'entidad_facturacion', 'lugar_entrega', 'contacto_entrega',
+  'terminos_pago', 'condiciones_envio', 'moneda', 'clave_uso_cfdi', 'descripcion_uso_cfdi',
+  'importe_total_documento', 'total_orden', 'fecha_documento',
+  'nombre_cliente', 'contacto_cliente', 'email_cliente',
+  'numero_cambio_orden', 'version_change_order', '_system_fileid',
+  'estatus_pago', 'replaced_by_id', 'lead_id', '__partidas'
+];
 
-const CRM_TABLE_CANDIDATES = ['DB CRM'];
+const CRM_TABLE_CANDIDATES = ['DB CRM', 'DB_CRM', 'db_crm', 'leads'];
 const CONTACTS_TABLE_CANDIDATES = ['contactos', 'Contactos', 'contacts', 'CONTACTS'];
 const AUDIT_LOGS_TABLE_CANDIDATES = ['audit_logs', 'bitacora', 'AUDIT_LOGS', 'audit_log'];
 const USUARIOS_TABLE_CANDIDATES = ['Usuarios', 'usuarios', 'users', 'USERS'];
-const OC_TABLE_CANDIDATES = ['DB_OC', 'DB OC', 'db_oc', 'ordenes_compra', 'purchase_orders'];
+const OC_TABLE_CANDIDATES = ['DB_OC', 'DB OC', 'db_oc', 'ordenes_compra'];
 
 export function getResolvedCRMTableName(): string {
   return resolvedCRMTableName || 'DB CRM';
@@ -86,64 +105,45 @@ export function getResolvedOCTableName(): string {
   return resolvedOCTableName || 'DB_OC';
 }
 
+export function getKnownCRMTableColumns(): string[] {
+  return knownCRMTableColumns;
+}
+
+export function getKnownOCTableColumns(): string[] {
+  return knownOCTableColumns;
+}
+
 /**
  * Probes the Supabase database to dynamically resolve actual table names
  */
 async function checkTableExists(url: string, key: string, cand: string, client: any): Promise<{ exists: boolean; columns: string[] }> {
-  const headers = {
-    'apikey': key,
-    'Authorization': `Bearer ${key}`,
-    'Content-Type': 'application/json'
-  };
-  const encoded = encodeURIComponent(cand);
-  
-  // 1. Intentar REST directo
   try {
-    const selectQuery = (cand === 'Contactos' || cand === 'contactos') ? '*' : 'id';
-    const res = await fetch(`${url}/rest/v1/${encoded}?select=${selectQuery}&limit=1`, { headers, method: 'GET' });
-    if (res.ok) {
-      const rows = await res.json();
-      const cols = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
-      return { exists: true, columns: cols };
-    }
-    
-    // Si da error pero no es un 404 de "does not exist", significa que existe pero hay RLS o temas de permisos
-    const text = await res.text();
-    const noExiste = text.includes('42P01') || 
-                      text.includes('does not exist') || 
-                      text.includes('PGRST205') || 
-                      text.includes('schema cache') || 
-                      text.includes('Could not find') ||
-                      res.status === 404;
-    if (!noExiste) {
-      return { exists: true, columns: [] };
-    }
-  } catch (e) {}
+    if (!client) return { exists: false, columns: [] };
 
-  // 2. Fallback con el SDK
-  if (client) {
-    try {
-      const { data, error } = await client.from(cand).select('*').limit(1);
-      if (!error) {
-        const cols = data && data.length > 0 ? Object.keys(data[0]) : [];
-        return { exists: true, columns: cols };
-      } else {
-        // Códigos de error de PostgREST: PGRST205 / 42P01 es relacion inexistente.
-        // Si es otro código, la tabla sí existe pero está bloqueada o vacía.
-        const msg = error.message?.toLowerCase() || '';
-        const isMissing = error.code === 'PGRST205' || 
-                          error.code === '42P01' || 
-                          msg.includes('does not exist') || 
-                          msg.includes('schema cache') || 
-                          msg.includes('could not find');
-        if (!isMissing) {
-          return { exists: true, columns: [] };
-        }
+    // Usar el SDK directamente en lugar de fetch manual — el SDK maneja el encoding de espacios
+    const { data, error } = await client
+      .from(cand)
+      .select('*')
+      .limit(1);
+
+    if (error) {
+      const msg = error.message?.toLowerCase() || '';
+      const isMissing = error.code === 'PGRST205' || 
+                        error.code === '42P01' || 
+                        msg.includes('does not exist') || 
+                        msg.includes('schema cache') || 
+                        msg.includes('could not find');
+      if (!isMissing) {
+        return { exists: true, columns: [] };
       }
-    } catch (e) {}
-  }
+      return { exists: false, columns: [] };
+    }
 
-  return { exists: false, columns: [] };
+    const columns = data && data.length > 0 ? Object.keys(data[0]) : [];
+    return { exists: true, columns };
+  } catch {
+    return { exists: false, columns: [] };
+  }
 }
 
 export async function probeTables(url: string, key: string, forceReset = false) {
@@ -156,11 +156,30 @@ export async function probeTables(url: string, key: string, forceReset = false) 
     resolvedAuditLogsTableName = null;
     resolvedUsuariosTableName = null;
     resolvedOCTableName = null;
-    knownCRMTableColumns = [];
+    knownCRMTableColumns = [
+      'id', 'informacion_general_folio', 'fecha_registro', 'informacion_general_cliente', 'informacion_general_planta',
+      'cliente_pais', 'cliente_ubicacion', 'informacion_general_proyecto', 'informacion_general_link_cotizacion',
+      'total_hardware_cotizacion', 'total_servicios_cotizacion', 'total_subtotal_cotizacion', 'total_iva_cotizacion',
+      'total_general_cotizacion', 'informacion_general_moneda', 'estado_proyecto', 'status_proyecto', 'folio_orden_compra',
+      'link_orden_compra', 'fecha_inicio_proyecto', 'informacion_general_instalacion_incluida', 'notas_comerciales',
+      'acciones_seguimiento', 'sustituye_folio_anterior', 'prioridad_nivel', 'etapa', 'nivel_termo', 'prioridad', 'estado',
+      'fecha_cambio_etapa', 'stagnation_days_limit', 'checklist_tasks', '__tareas'
+    ];
     knownContactsColumns = [];
     knownAuditLogsColumns = [];
     knownUsuariosColumns = [];
-    knownOCTableColumns = [];
+    knownOCTableColumns = [
+      'id', 'id_documento', 'nombre_archivo', 'link_pdf', 'tipo_documento', 'estado_documento',
+      'version_change_order', 'fecha_expedicion', 'fecha_modificacion', 'empresa_compradora',
+      'area_proyecto', 'contacto_comprador',  // <-- CORREGIDO
+      'empresa_proveedora', 'rfc_proveedor',
+      'direccion_proveedor', 'entidad_facturacion', 'lugar_entrega', 'contacto_entrega',
+      'terminos_pago', 'condiciones_envio', 'moneda', 'clave_uso_cfdi', 'descripcion_uso_cfdi',
+      'importe_total_documento', 'total_orden', 'fecha_documento',
+      'nombre_cliente', 'contacto_cliente', 'email_cliente',
+      'numero_cambio_orden', 'version_change_order', '_system_fileid',
+      'estatus_pago', 'replaced_by_id', 'lead_id', '__partidas'
+    ];
     cachedUrl = cleanUrl;
     cachedKey = cleanKey;
   }
@@ -173,7 +192,9 @@ export async function probeTables(url: string, key: string, forceReset = false) 
       const result = await checkTableExists(cleanUrl, cleanKey, cand, client);
       if (result.exists) {
         resolvedCRMTableName = cand;
-        knownCRMTableColumns = result.columns;
+        if (result.columns.length > 0) {
+          knownCRMTableColumns = result.columns;
+        }
         break;
       }
     }
@@ -242,16 +263,35 @@ export async function probeTables(url: string, key: string, forceReset = false) 
       const result = await checkTableExists(cleanUrl, cleanKey, cand, client);
       if (result.exists) {
         resolvedOCTableName = cand;
-        knownOCTableColumns = result.columns;
-        if (knownOCTableColumns.length === 0) {
-          knownOCTableColumns = ['id', 'moneda'];
+        if (result.columns.length > 0) {
+          knownOCTableColumns = result.columns;
+        } else {
+          knownOCTableColumns = [
+            'id', 'id_documento', 'nombre_archivo', 'link_pdf', 'tipo_documento', 'estado_documento',
+            'version_change_order', 'fecha_expedicion', 'fecha_modificacion', 'empresa_compradora',
+            'area_proyecto', 'contacto_comprador',  // <-- CORREGIDO
+            'empresa_proveedora', 'rfc_proveedor',
+            'terminos_pago', 'condiciones_envio', 'moneda',
+            'importe_total_documento', 'total_orden',
+            'lugar_entrega', '_system_fileid', 'numero_cambio_orden',
+            'estatus_pago', 'replaced_by_id', 'lead_id', '__partidas'
+          ];
         }
         break;
       }
     }
     if (!resolvedOCTableName) {
       resolvedOCTableName = 'DB_OC';
-      knownOCTableColumns = ['id', 'moneda'];
+      knownOCTableColumns = [
+        'id', 'id_documento', 'nombre_archivo', 'link_pdf', 'tipo_documento', 'estado_documento',
+        'version_change_order', 'fecha_expedicion', 'fecha_modificacion', 'empresa_compradora',
+        'area_proyecto', 'contacto_comprador',  // <-- CORREGIDO
+        'empresa_proveedora', 'rfc_proveedor',
+        'terminos_pago', 'condiciones_envio', 'moneda',
+        'importe_total_documento', 'total_orden',
+        'lugar_entrega', '_system_fileid', 'numero_cambio_orden',
+        'estatus_pago', 'replaced_by_id', 'lead_id', '__partidas'
+      ];
     }
   }
 }
@@ -679,25 +719,112 @@ export function mapRawUserAccount(u: any): UserAccount {
   };
 }
 
-export function mapRawPurchaseOrder(oc: any): PurchaseOrder {
-  const monedaVal = String(getFlexibleValue(oc, ['moneda', 'Moneda', 'currency'], 'MXN')).trim().toUpperCase();
-  const finalMoneda: 'USD' | 'MXN' = (monedaVal === 'USD' || monedaVal === 'usd') ? 'USD' : 'MXN';
+export function mapRawPurchaseOrder(raw: Record<string, any>): PurchaseOrder {
+  // Monto: la columna importe_total_documento es TEXT en DB, se castea a number
+  const rawMonto =
+    raw['importe_total_documento'] ??
+    raw['total_orden'] ??
+    raw['monto'] ??
+    0;
 
-  const instalacionVal = getFlexibleValue(oc, ['instalacionIncluida', 'instalacion_incluida', 'instalacion', 'Instalación', 'Instalación Incluida', 'instalacionIncluida'], true);
-  const isInstalacion = instalacionVal === true || instalacionVal === 'true' || instalacionVal === 't' || instalacionVal === 1 || instalacionVal === '1';
+  // Partidas: puede venir como array JSONB o como string serializado
+  let partidas: any[] | null = null;
+  const rawPartidas = raw['__partidas'] ?? raw['partidas'] ?? null;
+  if (rawPartidas) {
+    partidas = typeof rawPartidas === 'string'
+      ? JSON.parse(rawPartidas)
+      : rawPartidas;
+  }
 
   return {
-    id: String(getFlexibleValue(oc, ['id', 'ID', '_id']) || `po_${Math.random().toString(36).substr(2, 9)}`),
-    folioOC: String(getFlexibleValue(oc, ['folioOC', 'folio_oc', 'folio_orden_compra', 'Folio OC', 'Folio_OC'], '')),
-    linkOC: String(getFlexibleValue(oc, ['linkOC', 'link_oc', 'link_orden_compra', 'Link OC', 'Link_OC', 'pdf', 'enlace', 'archivo'], '')),
-    fechaInicio: String(getFlexibleValue(oc, ['fechaInicio', 'fecha_inicio', 'fecha_inicio_proyecto', 'Fecha Inicio', 'Fecha_Inicio', 'fecha'], '')),
-    instalacionIncluida: isInstalacion,
-    monto: Number(getFlexibleValue(oc, ['monto', 'monto_total', 'total', 'Monto', 'Total', 'importe'], 0)) || 0,
-    moneda: finalMoneda,
-    cliente: String(getFlexibleValue(oc, ['cliente', 'Cliente', 'empresa', 'Empresa'], '')),
-    proyecto: String(getFlexibleValue(oc, ['proyecto', 'Proyecto', 'obra', 'Obra'], '')),
-    folioRefCRM: String(getFlexibleValue(oc, ['folioRefCRM', 'folioRef', 'folio_crm', 'folioRefCRM', 'folio_ref', 'folio'], ''))
-  };
+    id: String(raw['id'] ?? ''),
+
+    // Folio del documento OC (columna real: id_documento)
+    folioOC:
+      raw['id_documento'] ??
+      raw['folio_oc'] ??
+      raw['folioOC'] ??
+      '',
+
+    // Link al PDF (columna real: link_pdf)
+    linkOC:
+      raw['link_pdf'] ??
+      raw['link_oc'] ??
+      raw['linkOC'] ??
+      '',
+
+    // Fecha (columna real: fecha_expedicion)
+    fechaInicio:
+      raw['fecha_expedicion'] ??
+      raw['fecha_inicio'] ??
+      raw['fecha_documento'] ??
+      raw['fechaInicio'] ??
+      '',
+
+    // Instalación: no existe en DB_OC real — se mantiene como false por defecto
+    instalacionIncluida:
+      raw['instalacion'] ??
+      raw['instalacion_incluida'] ??
+      raw['instalacionIncluida'] ??
+      false,
+
+    // Monto: castear de texto a número
+    monto: parseFloat(String(rawMonto).replace(/,/g, '')) || 0,
+
+    // Moneda
+    moneda: (raw['moneda'] === 'USD' ? 'USD' : 'MXN') as 'USD' | 'MXN',
+
+    // Cliente (columna real: empresa_compradora)
+    cliente:
+      raw['empresa_compradora'] ??
+      raw['nombre_cliente'] ??
+      raw['cliente'] ??
+      '',
+
+    // Proyecto (columna real: area_proyecto)
+    proyecto:
+      raw['area_proyecto'] ??
+      raw['proyecto'] ??
+      '',
+
+    // Folio referencia CRM (vinculado por _system_fileid si no existe folio_ref_crm)
+    folioRefCRM:
+      raw['folio_ref_crm'] ??
+      raw['folioRefCRM'] ??
+      raw['_system_fileid'] ??
+      raw['id_documento'] ??
+      '',
+
+    // Estatus de pago con valor por defecto
+    estatusPago:
+      raw['estatus_pago'] ??
+      raw['estatusPago'] ??
+      'Pendiente de cobro',
+
+    // Control de Change Orders
+    replacedById:
+      raw['replaced_by_id'] != null
+        ? Number(raw['replaced_by_id'])
+        : raw['replacedById'] ?? null,
+
+    // Vínculo con contacto
+    leadId:
+      raw['lead_id'] ??
+      raw['leadId'] ??
+      null,
+
+    // Partidas JSONB
+    __partidas: partidas,
+
+    // Campos extra útiles para la UI (no en PurchaseOrder base pero convenientes)
+    // Se pueden añadir a la interfaz si se extiende PurchaseOrder
+    _nombreArchivo: raw['nombre_archivo'] ?? '',
+    _tipoDocumento: raw['tipo_documento'] ?? '',
+    _empresaProveedora: raw['empresa_proveedora'] ?? '',
+    _contactoComprador: raw['contacto_comprador'] ?? '',
+    _terminosPago: raw['terminos_pago'] ?? '',
+    _lugarEntrega: raw['lugar_entrega'] ?? '',
+  } as any;
 }
 
 /**
@@ -1179,7 +1306,8 @@ export async function loadFromSupabase(url: string, key: string): Promise<{
           moneda: (r.informacion_general_moneda === 'USD' ? 'USD' : 'MXN'),
           cliente: r.informacion_general_cliente || '',
           proyecto: r.informacion_general_proyecto || '',
-          folioRefCRM: r.informacion_general_folio
+          folioRefCRM: r.informacion_general_folio,
+          estatusPago: 'Pendiente de cobro'
         });
       } else {
         const matchingPoIndex = purchaseOrders.findIndex(p => 
@@ -1251,13 +1379,22 @@ export async function pushPurchaseOrderToSupabase(
       id: numericId,
       moneda: po.moneda,
       folio_oc: po.folioOC,
+      id_documento: po.folioOC, // Alias for physical DB
       link_oc: po.linkOC,
+      link_pdf: po.linkOC, // Alias for physical DB
       fecha_inicio: po.fechaInicio,
+      fecha_expedicion: po.fechaInicio, // Alias for physical DB
       instalacion: po.instalacionIncluida,
       monto: po.monto,
       cliente: po.cliente,
+      empresa_compradora: po.cliente, // Alias for physical DB
       proyecto: po.proyecto,
-      folio_ref_crm: po.folioRefCRM
+      area_proyecto: po.proyecto, // Alias for physical DB
+      folio_ref_crm: po.folioRefCRM,
+      estatus_pago: po.estatusPago || 'Pendiente de cobro',
+      replaced_by_id: po.replacedById || null,
+      lead_id: po.leadId || null,
+      __partidas: po.__partidas ? (typeof po.__partidas === 'string' ? po.__partidas : JSON.stringify(po.__partidas)) : null
     };
 
     const payload: any = { id: numericId };
@@ -2469,8 +2606,16 @@ create table if not exists "DB_OC" (
   cliente text,
   proyecto text,
   folio_ref_crm text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  estatus_pago varchar(50) default 'Pendiente de cobro',
+  replaced_by_id bigint references "DB_OC"(id) on delete set null,
+  lead_id uuid references contactos(id) on delete set null,
+  __partidas jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  constraint chk_estatus_pago check (estatus_pago in ('Pendiente de cobro', 'Cobrado', 'Cancelada', 'Reemplazada', 'Activa')),
+  constraint chk_vinculo_reemplazo check ((estatus_pago = 'Reemplazada' and replaced_by_id is not null) or (estatus_pago <> 'Reemplazada'))
 );
+
+create index if not exists idx_db_oc_partidas_gin on "DB_OC" using gin (__partidas);
 
 create table if not exists "DB OC" (
   id bigint primary key,
@@ -2483,8 +2628,16 @@ create table if not exists "DB OC" (
   cliente text,
   proyecto text,
   folio_ref_crm text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  estatus_pago varchar(50) default 'Pendiente de cobro',
+  replaced_by_id bigint references "DB OC"(id) on delete set null,
+  lead_id uuid references contactos(id) on delete set null,
+  __partidas jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  constraint chk_estatus_pago_db_oc check (estatus_pago in ('Pendiente de cobro', 'Cobrado', 'Cancelada', 'Reemplazada', 'Activa')),
+  constraint chk_vinculo_reemplazo_db_oc check ((estatus_pago = 'Reemplazada' and replaced_by_id is not null) or (estatus_pago <> 'Reemplazada'))
 );
+
+create index if not exists idx_db_oc_space_partidas_gin on "DB OC" using gin (__partidas);
 
 -- 5. Tabla de Gestión de Usuarios y Accesos (Usuarios o usuarios)
 create table if not exists "Usuarios" (
@@ -2737,5 +2890,425 @@ export function subscribeToTableRealtime(
 
   return channel;
 }
+
+/**
+ * Retorna la instancia activa o recupera y crea una nueva según las variables locales o de entorno.
+ */
+export function getActiveClient(): SupabaseClient | null {
+  if (cachedClient) return cachedClient;
+  const url = (import.meta as any).env.VITE_SUPABASE_URL || localStorage.getItem('verse_supabase_url') || '';
+  const key = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || localStorage.getItem('verse_supabase_key') || '';
+  if (url && key) {
+    return getSupabaseClient(url, key);
+  }
+  return null;
+}
+
+// supabaseService.ts — Verificación de sesión al cargar
+export async function verificarSesionActiva(): Promise<boolean> {
+  const supabase = getActiveClient();
+  if (!supabase) {
+    console.warn('[Auth] Cliente de Supabase no inicializado.');
+    return false;
+  }
+  const { data: { session }, error } = await supabase.auth.getSession();
+  
+  if (error || !session) {
+    console.warn('[Auth] Sin sesión activa. Las queries con RLS retornarán vacío.');
+    return false;
+  }
+  
+  console.log('[Auth] Sesión activa:', session.user?.email);
+  return true;
+}
+
+export const ocService = {
+  // 1. Obtener todas las OCs con soporte de paginación básica y filtros
+  async getPurchaseOrders(filters?: {
+    estatusPago?: string;
+    estatus?: string;
+    search?: string;
+  }): Promise<PurchaseOrder[]> {
+    const supabase = getActiveClient();
+    if (!supabase) {
+      console.warn('Cliente de Supabase no inicializado');
+      return [];
+    }
+
+    const tableName = getResolvedOCTableName();
+
+    // Determinar la columna de ordenación de forma resiliente según las columnas conocidas detectadas
+    let orderByCol = 'id';
+    if (knownOCTableColumns && knownOCTableColumns.length > 0) {
+      if (knownOCTableColumns.includes('fecha_expedicion')) {
+        orderByCol = 'fecha_expedicion';
+      } else if (knownOCTableColumns.includes('fecha_inicio')) {
+        orderByCol = 'fecha_inicio';
+      } else if (knownOCTableColumns.includes('created_at')) {
+        orderByCol = 'created_at';
+      }
+    } else {
+      // Fallback si no hay columnas conocidas
+      orderByCol = 'fecha_expedicion';
+    }
+
+    // Determinar la columna de estatus de forma resiliente
+    let estatusCol = 'estatus_pago';
+    if (knownOCTableColumns && knownOCTableColumns.length > 0 && !knownOCTableColumns.includes('estatus_pago')) {
+      if (knownOCTableColumns.includes('estado')) {
+        estatusCol = 'estado';
+      }
+    }
+
+    // Columnas reales de la tabla
+    const SELECT_COLUMNS = `
+      id,
+      id_documento,
+      nombre_archivo,
+      link_pdf,
+      tipo_documento,
+      estado_documento,
+      version_change_order,
+      fecha_expedicion,
+      fecha_modificacion,
+      empresa_compradora,
+      area_proyecto,
+      contacto_comprador,
+      empresa_proveedora,
+      moneda,
+      importe_total_documento,
+      total_orden,
+      estatus_pago,
+      replaced_by_id,
+      lead_id,
+      __partidas,
+      _system_fileid,
+      terminos_pago,
+      lugar_entrega,
+      condiciones_envio,
+      numero_cambio_orden
+    `;
+
+    const activeEstatus = filters?.estatusPago ?? filters?.estatus;
+
+    try {
+      let query = supabase
+        .from(tableName)
+        .select(SELECT_COLUMNS)
+        .order(orderByCol, { ascending: false });
+
+      if (activeEstatus && activeEstatus !== 'Todos') {
+        query = query.eq(estatusCol, activeEstatus);
+      }
+
+      // Búsqueda de texto en columnas relevantes
+      if (filters?.search && filters.search.trim() !== '') {
+        const term = filters.search.trim();
+        const possibleSearchCols = ['id_documento', 'empresa_compradora', 'area_proyecto', 'nombre_archivo', 'folio_oc', 'cliente', 'proyecto', 'folio_ref_crm'];
+        const existingSearchCols = knownOCTableColumns && knownOCTableColumns.length > 0 
+          ? possibleSearchCols.filter(col => knownOCTableColumns.includes(col))
+          : ['id_documento', 'empresa_compradora', 'area_proyecto', 'nombre_archivo']; // fallback
+
+        if (existingSearchCols.length > 0) {
+          const orFilterString = existingSearchCols.map(col => `${col}.ilike.%${term}%`).join(',');
+          query = query.or(orFilterString);
+        }
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.warn('[DB_OC] Error al realizar select con SELECT_COLUMNS, reintentando con select(*)...', error);
+        throw error;
+      }
+
+      return (data ?? []).map(mapRawPurchaseOrder);
+
+    } catch (err) {
+      console.warn('[DB_OC] Iniciando consulta de recuperación resiliente select(*) para tabla:', tableName, err);
+      try {
+        // Fallback seguro: select('*') y ordenación dinámica
+        let fallbackQuery = supabase
+          .from(tableName)
+          .select('*');
+
+        // Aplicamos ordenación de forma segura
+        try {
+          fallbackQuery = fallbackQuery.order(orderByCol, { ascending: false });
+        } catch (orderErr) {
+          console.warn('[DB_OC] Fallo al ordenar en consulta de fallback:', orderErr);
+        }
+
+        if (activeEstatus && activeEstatus !== 'Todos') {
+          fallbackQuery = fallbackQuery.eq(estatusCol, activeEstatus);
+        }
+
+        if (filters?.search && filters.search.trim() !== '') {
+          const term = filters.search.trim();
+          const possibleSearchCols = ['id_documento', 'empresa_compradora', 'area_proyecto', 'nombre_archivo', 'folio_oc', 'cliente', 'proyecto', 'folio_ref_crm'];
+          const existingSearchCols = knownOCTableColumns && knownOCTableColumns.length > 0 
+            ? possibleSearchCols.filter(col => knownOCTableColumns.includes(col))
+            : possibleSearchCols;
+
+          if (existingSearchCols.length > 0) {
+            const orFilterString = existingSearchCols.map(col => `${col}.ilike.%${term}%`).join(',');
+            fallbackQuery = fallbackQuery.or(orFilterString);
+          }
+        }
+
+        const { data: fbData, error: fbError } = await fallbackQuery;
+        if (fbError) {
+          console.error('[DB_OC] Fallo definitivo incluso con select(*):', fbError);
+          throw fbError;
+        }
+
+        console.log(`[DB_OC] Recuperación exitosa. Se extrajeron ${fbData?.length ?? 0} registros de ${tableName}.`);
+        return (fbData ?? []).map(mapRawPurchaseOrder);
+
+      } catch (fbErr) {
+        console.error('[DB_OC] Excepción definitiva en getPurchaseOrders:', fbErr);
+        return [];
+      }
+    }
+  },
+
+  // 3. Búsqueda avanzada indexada DENTRO del JSONB utilizando operadores de contención
+  async searchInPartidas(articuloText: string) {
+    const client = getActiveClient();
+    if (!client) throw new Error('Cliente de Supabase no inicializado');
+
+    // Busca registros donde alguna partida coincida parcialmente con la descripción
+    let { data, error } = await client
+      .from(getResolvedOCTableName())
+      .select('*')
+      .contains('__partidas', [{ Descripcion_Articulo: articuloText }]);
+
+    if (error || !data || data.length === 0) {
+      // Fallback a 'descripcion' para compatibilidad retroactiva
+      const retryResult = await client
+        .from(getResolvedOCTableName())
+        .select('*')
+        .contains('__partidas', [{ descripcion: articuloText }]);
+      if (!retryResult.error && retryResult.data && retryResult.data.length > 0) {
+        data = retryResult.data;
+      }
+    }
+
+    return (data || []).map(mapRawPurchaseOrder);
+  },
+
+  // 4. Actualización transaccional de estados con validación de negocio B2B
+  async updateOCStatus(
+    ocId: number | string, 
+    newStatus: string, 
+    replacedById: number | string | null = null,
+    metadata?: Partial<PurchaseOrder>
+  ) {
+    const client = getActiveClient();
+    if (!client) throw new Error('Cliente de Supabase no inicializado');
+
+    if (newStatus === 'Reemplazada' && !replacedById) {
+      throw new Error('Para marcar una OC como Reemplazada se requiere vincular el ID del nuevo documento.');
+    }
+
+    const rawPayload: any = { 
+      estatus_pago: newStatus,
+      replaced_by_id: replacedById ? Number(replacedById) : null
+    };
+
+    if (metadata) {
+      if (metadata.folioOC !== undefined) {
+        rawPayload.folio_oc = metadata.folioOC;
+        rawPayload.id_documento = metadata.folioOC;
+      }
+      if (metadata.linkOC !== undefined) {
+        rawPayload.link_oc = metadata.linkOC;
+        rawPayload.link_pdf = metadata.linkOC;
+      }
+      if (metadata.fechaInicio !== undefined) {
+        rawPayload.fecha_inicio = metadata.fechaInicio;
+        rawPayload.fecha_expedicion = metadata.fechaInicio;
+      }
+      if (metadata.instalacionIncluida !== undefined) rawPayload.instalacion = metadata.instalacionIncluida;
+      if (metadata.monto !== undefined) rawPayload.monto = metadata.monto;
+      if (metadata.moneda !== undefined) rawPayload.moneda = metadata.moneda;
+      if (metadata.cliente !== undefined) {
+        rawPayload.cliente = metadata.cliente;
+        rawPayload.empresa_compradora = metadata.cliente;
+      }
+      if (metadata.proyecto !== undefined) {
+        rawPayload.proyecto = metadata.proyecto;
+        rawPayload.area_proyecto = metadata.proyecto;
+      }
+      if (metadata.folioRefCRM !== undefined) rawPayload.folio_ref_crm = metadata.folioRefCRM;
+      if (metadata.leadId !== undefined) rawPayload.lead_id = metadata.leadId;
+      if (metadata.__partidas !== undefined) rawPayload.__partidas = metadata.__partidas;
+    }
+
+    const payload: any = {};
+    if (knownOCTableColumns.length > 0) {
+      for (const col of knownOCTableColumns) {
+        if (rawPayload[col] !== undefined) {
+          payload[col] = rawPayload[col];
+        } else {
+          const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+          for (const k of Object.keys(rawPayload)) {
+            if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+              payload[col] = rawPayload[k];
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      Object.assign(payload, rawPayload);
+    }
+
+    const { data, error } = await client
+      .from(getResolvedOCTableName())
+      .update(payload)
+      .eq('id', Number(ocId))
+      .select();
+
+    if (error) throw error;
+    return data && data.length > 0;
+  },
+
+  // 5. Vincular y cerrar negocio (Fase 3: CRM ➔ OC Puente)
+  async closeDealAndLinkOC(
+    leadId: string,
+    ocId: number,
+    folioOC: string,
+    linkOC: string,
+    fechaInicio: string,
+    instalacionIncluida: boolean,
+    monto: number,
+    moneda: string,
+    cliente: string,
+    proyecto: string,
+    folioRefCRM: string,
+    __partidas?: any[]
+  ) {
+    const client = getActiveClient();
+    if (!client) throw new Error('Cliente de Supabase no inicializado');
+
+    // 1. Actualizar el Lead en DB CRM
+    const validUUID = toValidUUID(leadId);
+    const crmTableName = getResolvedCRMTableName();
+
+    const crmPayload: any = {
+      estado_proyecto: 'Cerrado Ganado',
+      status_proyecto: 'Win',
+      nivel_termo: 'Win',
+      estado: 'Cerrado Ganado',
+      etapa: 'Cerrado Ganado',
+      folio_orden_compra: folioOC,
+      link_orden_compra: linkOC,
+      fecha_inicio_proyecto: fechaInicio,
+      informacion_general_instalacion_incluida: instalacionIncluida
+    };
+
+    // Ajustar columnas de DB CRM según columnas detectadas en probeTables
+    const finalCrmPayload: any = { id: validUUID };
+    if (knownCRMTableColumns.length > 0) {
+      for (const col of knownCRMTableColumns) {
+        if (col === 'id') continue;
+        if (crmPayload[col] !== undefined) {
+          finalCrmPayload[col] = crmPayload[col];
+        } else {
+          // Fallback buscando por nombre normalizado
+          const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+          for (const k of Object.keys(crmPayload)) {
+            if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+              finalCrmPayload[col] = crmPayload[k];
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      Object.assign(finalCrmPayload, crmPayload);
+    }
+
+    const { error: crmError } = await client
+      .from(crmTableName)
+      .upsert(finalCrmPayload, { onConflict: 'id' });
+
+    if (crmError) {
+      console.error('Error al actualizar el lead en CRM:', crmError);
+      throw crmError;
+    }
+
+    // 2. Insertar/Actualizar la Orden de Compra en DB_OC
+    const ocTableName = getResolvedOCTableName();
+    const ocPayload: any = {
+      id: Number(ocId),
+      folio_oc: folioOC,
+      id_documento: folioOC, // Alias for physical DB
+      link_oc: linkOC,
+      link_pdf: linkOC, // Alias for physical DB
+      fecha_inicio: fechaInicio,
+      fecha_expedicion: fechaInicio, // Alias for physical DB
+      instalacion: instalacionIncluida,
+      monto: Number(monto),
+      moneda: moneda,
+      cliente: cliente,
+      empresa_compradora: cliente, // Alias for physical DB
+      proyecto: proyecto,
+      area_proyecto: proyecto, // Alias for physical DB
+      folio_ref_crm: folioRefCRM,
+      lead_id: validUUID,
+      estatus_pago: 'Pendiente de cobro',
+      __partidas: __partidas || []
+    };
+
+    const finalOcPayload: any = { id: Number(ocId) };
+    if (knownOCTableColumns.length > 0) {
+      for (const col of knownOCTableColumns) {
+        if (col === 'id') continue;
+        if (ocPayload[col] !== undefined) {
+          finalOcPayload[col] = ocPayload[col];
+        } else {
+          const normCol = col.toLowerCase().replace(/[\s_-]/g, '');
+          for (const k of Object.keys(ocPayload)) {
+            if (k.toLowerCase().replace(/[\s_-]/g, '') === normCol) {
+              finalOcPayload[col] = ocPayload[k];
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      Object.assign(finalOcPayload, ocPayload);
+    }
+
+    const { error: ocError } = await client
+      .from(ocTableName)
+      .upsert(finalOcPayload, { onConflict: 'id' });
+
+    if (ocError) {
+      console.error('Error al registrar la orden de compra:', ocError);
+      throw ocError;
+    }
+
+    return { success: true };
+  }
+};
+
+export const crmService = {
+  async getProyectosWin() {
+    const client = getActiveClient();
+    if (!client) throw new Error('Cliente de Supabase no inicializado');
+    
+    const { data, error } = await client
+      .from(getResolvedCRMTableName())
+      .select('*')
+      .eq('status_proyecto', 'Win');
+      
+    if (error) throw error;
+    return (data || []).map(mapRawCRMRecord);
+  }
+};
+
 
 

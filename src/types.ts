@@ -102,17 +102,60 @@ export interface Contact {
   empresa?: string;
 }
 
+export interface OCItemPartida {
+  ID_Linea: string;
+  Numero_Linea: number;
+  Clave_Articulo_Proveedor: string;
+  Descripcion_Articulo: string;
+  Descripcion_Producto?: string;
+  Unidad_Medida: string;
+  Cantidad: number;
+  Cantidad_Ordenada?: number;
+  Precio_Unitario: number;
+  Importe_Linea: number;
+  Importe_Total_Linea?: number;
+  Estado_Linea?: string;
+  Fecha_Requerida?: string;
+  Fecha_Prometida?: string;
+  Fecha_Solicitada?: string;
+  ID_Documento?: string;
+  Tasa_Impuesto?: string;
+  Monto_Cancelado?: number;
+}
+
 export interface PurchaseOrder {
-  id: string;              // Base 1-based index or string UUID representation
-  folioOC: string;         // e.g. "OC-BIMBO-990-23"
-  linkOC: string;          // Google Drive PDF hyperlink
-  fechaInicio: string;     // YYYY-MM-DD project launch date
-  instalacionIncluida: boolean; // physical deployment included flag
-  monto: number;           // formal general total numeric amount
-  moneda: 'USD' | 'MXN';   // transaction currency
-  cliente: string;         // customer name
-  proyecto: string;        // project name/description
-  folioRefCRM: string;     // referencing CRM Record folio
+  id: string;
+  folioOC: string;           // ← id_documento en DB
+  linkOC: string;            // ← link_pdf en DB
+  fechaInicio: string;       // ← fecha_expedicion en DB
+  instalacionIncluida: boolean;
+  monto: number;             // ← parseFloat(importe_total_documento) en DB
+  moneda: 'USD' | 'MXN';
+  cliente: string;           // ← empresa_compradora en DB
+  proyecto: string;          // ← area_proyecto en DB
+  folioRefCRM: string;       // ← _system_fileid o id_documento en DB
+  estatusPago: string;
+  replacedById?: number | null;
+  leadId?: string | null;
+  __partidas?: OCItemPartida[] | null;
+  // Campos extendidos del esquema real
+  nombreArchivo?: string;
+  tipoDocumento?: string;
+  empresaProveedora?: string;
+  contactoComprador?: string;
+  terminosPago?: string;
+  lugarEntrega?: string;
+  versionChangeOrder?: string;
+  numeroCambioOrden?: string;
+  estadoDocumento?: string;
+  
+  // Compatibilidad con prefijos
+  _nombreArchivo?: string;
+  _tipoDocumento?: string;
+  _empresaProveedora?: string;
+  _contactoComprador?: string;
+  _terminosPago?: string;
+  _lugarEntrega?: string;
 }
 
 export interface ColumnConfig {
