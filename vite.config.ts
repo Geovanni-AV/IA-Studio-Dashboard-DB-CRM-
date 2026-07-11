@@ -24,7 +24,7 @@ export default defineConfig(() => {
     // 🛡️ 4. NUEVA INYECCIÓN: Tus credenciales reales integradas sin romper nada
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
-        'https://iqxwrfjfdvixidsnfwja.supabase.co/auth/v1/callback'
+        'https://iqxwrfjfdvixidsnfwja.supabase.co'
       ),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxeHdyZmpmZHZpeGlkc25md2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjc2NDEsImV4cCI6MjA5NjcwMzY0MX0.mt76SY7Op1JdsjnJ3YoMQocWz40-Q0gp23poSqKTaEg'
